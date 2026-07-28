@@ -1,0 +1,3 @@
+html { background: #0d1610; }
+body { background: radial-gradient(circle at 88% 0, #263d2d 0, #0d1610 34rem); margin: 0; min-width: 320px; }
+button, input { font: inherit; }

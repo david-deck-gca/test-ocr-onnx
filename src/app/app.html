@@ -1,0 +1,61 @@
+<main>
+  <header class="topbar">
+    <div class="brand"><img src="/favicon.png" alt="GCA" /><span>Container Mark Reader</span></div>
+    <span class="offline-badge">Offline-ready</span>
+  </header>
+
+  <section class="intro" aria-labelledby="page-title">
+    <p class="eyebrow">LOCAL OCR WORKSPACE</p>
+    <h1 id="page-title">Read the marks. Keep the image local.</h1>
+    <p>Extract container identification and capacity data from difficult side-wall photos. Processing happens in this browser.</p>
+  </section>
+
+  @if (diagnostics().length) {
+    <section class="diagnostics" aria-live="assertive" aria-labelledby="diagnostic-title">
+      <div><p class="eyebrow">ATTENTION REQUIRED</p><h2 id="diagnostic-title">OCR diagnostic</h2></div>
+      <button class="icon-button" type="button" (click)="dismissDiagnostics()" aria-label="Dismiss diagnostics">x</button>
+      @for (diagnostic of diagnostics(); track diagnostic.stage + diagnostic.message) {
+        <article><strong>{{ diagnostic.stage }}</strong><p>{{ diagnostic.message }}</p>@if (diagnostic.technical) { <details><summary>Technical details</summary><code>{{ diagnostic.technical }}</code></details> }</article>
+      }
+    </section>
+  }
+
+  <section class="workspace">
+    <section class="capture-panel" aria-labelledby="capture-title">
+      <div class="panel-heading"><div><p class="eyebrow">01 / IMAGE</p><h2 id="capture-title">Container side photo</h2></div>@if (hasImage()) { <button class="text-button" type="button" (click)="clearImage()">Replace image</button> }</div>
+      <input #fileInput type="file" accept="image/*" capture="environment" hidden (change)="selectFile($event)" />
+
+      @if (cameraOpen()) {
+        <div class="camera-frame"><video #videoPreview autoplay playsinline muted></video><div class="camera-actions"><button class="secondary" type="button" (click)="closeCamera()">Cancel</button><button class="primary" type="button" (click)="capturePhoto()">Capture photo</button></div></div>
+      } @else if (previewUrl(); as url) {
+        <figure class="image-preview"><img [src]="url" alt="Selected container" /><figcaption>{{ sourceName() }}</figcaption></figure>
+      } @else {
+        <div class="empty-preview"><span>Container photo</span><p>Use a close, well-lit image of one container side.</p><div><button class="primary" type="button" (click)="openCamera()">Take photo</button><button class="secondary" type="button" (click)="openFilePicker()">Choose image</button></div></div>
+      }
+      @if (hasImage() && !cameraOpen()) { <div class="source-actions"><button class="secondary" type="button" (click)="openCamera()">Take another photo</button><button class="secondary" type="button" (click)="openFilePicker()">Choose another image</button></div> }
+    </section>
+
+    <section class="workflow-panel" aria-labelledby="workflow-title">
+      <div class="panel-heading"><div><p class="eyebrow">02 / OCR</p><h2 id="workflow-title">Processing approach</h2></div></div>
+      <div class="mode-options" role="radiogroup" aria-label="Processing mode">
+        <button type="button" [class.selected]="processingMode() === 'full-photo'" (click)="setMode('full-photo')" role="radio" [attr.aria-checked]="processingMode() === 'full-photo'"><strong>Full photo</strong><span>Read all visible painted text.</span></button>
+        <button type="button" [class.selected]="processingMode() === 'guided-crop'" (click)="setMode('guided-crop')" role="radio" [attr.aria-checked]="processingMode() === 'guided-crop'"><strong>Guided crop</strong><span>Prioritize the closest group of markings.</span></button>
+      </div>
+      <div class="status" [class.busy]="processing()"><span></span><p>{{ status() }}</p></div>
+      <button class="primary run-button" type="button" [disabled]="!hasImage() || processing()" (click)="processImage()">{{ processing() ? 'Processing locally...' : 'Run local OCR' }}</button>
+      <p class="helper">No image data is uploaded. If a model cannot load, its complete ONNX error appears above.</p>
+    </section>
+  </section>
+
+  <section class="results" aria-labelledby="results-title">
+    <div class="panel-heading"><div><p class="eyebrow">03 / REVIEW</p><h2 id="results-title">Structured container data</h2></div><button class="primary" type="button" [disabled]="!hasImage()" (click)="exportJson()">Export JSON</button></div>
+    <div class="field-grid">
+      <label class="wide">Container ID<input [value]="fields().containerId.value" (input)="updateField('containerId', $any($event.target).value)" placeholder="MSCU 123456 7" autocapitalize="characters" />@if (fields().containerId.value) { <small [class.valid]="containerIdValid()" [class.invalid]="!containerIdValid()">{{ containerIdValid() ? 'ISO 6346 check digit valid' : 'Check the ID or check digit' }}</small> }</label>
+      <label>MGW<input [value]="fields().mgw.value" (input)="updateField('mgw', $any($event.target).value)" placeholder="30 480" /><span>KG</span></label>
+      <label>TARE<input [value]="fields().tare.value" (input)="updateField('tare', $any($event.target).value)" placeholder="2 210" /><span>KG</span></label>
+      <label>PAYLOAD<input [value]="fields().payload.value" (input)="updateField('payload', $any($event.target).value)" placeholder="28 270" /><span>KG</span></label>
+      <label>CU.CAP<input [value]="fields().cuCap.value" (input)="updateField('cuCap', $any($event.target).value)" placeholder="33.2" /><span>CU.M</span></label>
+    </div>
+    <div class="raw-text"><h3>Raw detected text</h3>@if (rawText().length) { <ul>@for (line of rawText(); track line) { <li>{{ line }}</li> }</ul> } @else { <p>Detected lines will be retained here with the exported record.</p> }</div>
+  </section>
+</main>

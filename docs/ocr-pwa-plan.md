@@ -1,0 +1,41 @@
+# Container Mark Reader
+
+## Current status
+
+The Angular 22 PWA shell is implemented. It supports camera capture, device image selection, full-photo and guided-crop modes, editable structured fields, ISO 6346 check-digit validation, local JSON export, and accessible technical diagnostics. The user interface does not upload images.
+
+`npm run build` and `npm test -- --watch=false` passed on 2026-07-28. The two public PaddleOCR source archives were also downloaded to `models/source/`.
+
+Browser OCR is provided by `@gutenye/ocr-browser`, an MIT-licensed browser implementation built on PaddleOCR and ONNX Runtime. It performs detector preprocessing, text-region extraction, recognition preprocessing, and CTC decoding on-device. OpenCV.js is served as a local static asset for perspective crops. The UI reports initialization and inference failures with the original technical details.
+
+## Model preparation
+
+`npm run models:download` retains the official PaddleOCR source inference archives for provenance:
+
+- PP-OCRv5 mobile text detector
+- English PP-OCRv5 mobile recognizer
+
+The active browser model bundle comes from the `@gutenye/ocr-models` npm package and is copied into the Angular build at:
+
+- `/models/ch_PP-OCRv4_det_infer.onnx`
+- `/models/ch_PP-OCRv4_rec_infer.onnx`
+- `/models/ppocr_keys_v1.txt`
+
+The package implements the matching image normalization, detector box decoding, crop rectification, CTC decoding, and character dictionary mapping. The older downloaded PP-OCRv5 source archives are not included in the deployed model bundle because their current Paddle 3 export format could not be converted with the available Windows Paddle2ONNX binary.
+
+## JSON contract
+
+One input image exports one JSON record. It includes source metadata, processing mode, `container.id`, `mgw`, `tare`, `payload`, `cuCap`, raw text, and warnings. Container IDs are checked against ISO 6346 format and check digit; questionable values remain visible for correction.
+
+## Offline deployment
+
+The Angular service worker pre-caches application files, local ONNX assets, and ONNX Runtime WASM binaries. The Nginx Docker image supplies cross-origin isolation headers for multi-threaded WASM. Initial installation requires access to the static server; after assets are cached, browser-side work is offline.
+
+## Improvements backlog
+
+1. Complete and test PaddleOCR ONNX preprocessing and postprocessing with real container images.
+2. Add a four-corner crop editor and text-region overlays.
+3. Add tiled/multi-scale detection and controlled contrast, glare, and denoise variants.
+4. Add curved-text unwarping after measuring failure cases on representative container photos.
+5. Add a sample-image evaluation set and field-level accuracy benchmark.
+6. Add model-version switching and offline cache status management.

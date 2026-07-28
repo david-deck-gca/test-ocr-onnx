@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/@angular/service-worker/config/schema.json",
+  "index": "/index.html",
+  "assetGroups": [
+    {
+      "name": "application",
+      "installMode": "prefetch",
+      "resources": { "files": ["/favicon.png", "/index.html", "/*.css", "/*.js"] }
+    },
+    {
+      "name": "ocr-assets",
+      "installMode": "prefetch",
+      "updateMode": "prefetch",
+      "resources": { "files": ["/models/**", "/ort/**"] }
+    }
+  ]
+}
