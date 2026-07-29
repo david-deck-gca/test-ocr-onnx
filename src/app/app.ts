@@ -3,12 +3,13 @@ import Ocr from '@gutenye/ocr-browser';
 import * as ort from 'onnxruntime-web';
 
 type ProcessingMode = 'full-photo' | 'guided-crop';
-type FieldKey = 'containerId' | 'mgw' | 'tare' | 'payload' | 'cuCap';
+type FieldKey = 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters';
 
 interface ContainerField {
   value: string;
   unit?: string;
   confidence?: number;
+  calculated?: boolean;
 }
 
 interface Diagnostic {
@@ -36,10 +37,14 @@ export class App {
   protected readonly rawText = signal<string[]>([]);
   protected readonly fields = signal<Record<FieldKey, ContainerField>>({
     containerId: { value: '' },
-    mgw: { value: '', unit: 'KG' },
-    tare: { value: '', unit: 'KG' },
-    payload: { value: '', unit: 'KG' },
-    cuCap: { value: '', unit: 'CU.M' },
+    isoCode: { value: '' },
+    mpgmKg: { value: '', unit: 'KG' },
+    mpgmLb: { value: '', unit: 'LB' },
+    tareKg: { value: '', unit: 'KG' },
+    tareLb: { value: '', unit: 'LB' },
+    payloadKg: { value: '', unit: 'KG' },
+    payloadLb: { value: '', unit: 'LB' },
+    capacityLiters: { value: '', unit: 'L' },
   });
   protected readonly containerIdValid = computed(() => this.validateContainerId(this.fields().containerId.value));
   protected readonly hasImage = computed(() => this.previewUrl() !== null);
@@ -133,7 +138,14 @@ export class App {
   }
 
   protected updateField(key: FieldKey, value: string): void {
-    this.fields.update((fields) => ({ ...fields, [key]: { ...fields[key], value } }));
+    this.fields.update((fields) => ({
+      ...fields,
+      [key]: {
+        ...fields[key],
+        value,
+        ...(key === 'payloadKg' || key === 'payloadLb' ? { calculated: false } : {}),
+      },
+    }));
   }
 
   protected async processImage(): Promise<void> {
@@ -181,10 +193,11 @@ export class App {
       },
       container: {
         id: { ...fields.containerId, iso6346Valid: this.containerIdValid() },
-        mgw: fields.mgw,
-        tare: fields.tare,
-        payload: fields.payload,
-        cuCap: fields.cuCap,
+        isoCode: fields.isoCode,
+        mpgm: { kg: fields.mpgmKg, lb: fields.mpgmLb },
+        tare: { kg: fields.tareKg, lb: fields.tareLb },
+        payload: { kg: fields.payloadKg, lb: fields.payloadLb },
+        capacity: { liters: fields.capacityLiters },
       },
       warnings,
       rawText: this.rawText(),
@@ -248,29 +261,71 @@ export class App {
 
   private extractFields(lines: Array<{ text: string; mean: number }>): Record<FieldKey, ContainerField> {
     const fields: Record<FieldKey, ContainerField> = {
-      containerId: { value: '' }, mgw: { value: '', unit: 'KG' }, tare: { value: '', unit: 'KG' },
-      payload: { value: '', unit: 'KG' }, cuCap: { value: '', unit: 'CU.M' },
+      containerId: { value: '' }, isoCode: { value: '' },
+      mpgmKg: { value: '', unit: 'KG' }, mpgmLb: { value: '', unit: 'LB' },
+      tareKg: { value: '', unit: 'KG' }, tareLb: { value: '', unit: 'LB' },
+      payloadKg: { value: '', unit: 'KG' }, payloadLb: { value: '', unit: 'LB' },
+      capacityLiters: { value: '', unit: 'L' },
     };
     const text = lines.map((line) => ({ ...line, normalized: line.text.toUpperCase().replace(/[|]/g, 'I') }));
     const find = (pattern: RegExp) => text.find((line) => pattern.test(line.normalized));
-    const numberAfter = (line: typeof text[number] | undefined, label: string) => {
-      if (!line) return undefined;
-      const value = line.normalized.match(new RegExp(`${label}[^0-9]*(\\d[\\d ,.]+)`));
-      return value?.[1].replace(/[, ]/g, '');
-    };
     const idLine = find(/[A-Z]{3}[UJZ][\s-]*\d{6}[\s-]*\d/);
     if (idLine) {
       fields.containerId = { value: idLine.normalized.match(/[A-Z]{3}[UJZ][\s-]*\d{6}[\s-]*\d/)![0].replace(/[\s-]/g, ''), confidence: idLine.mean };
     }
-    const mgw = find(/\bMGW\b|GROSS\s*WEIGHT/);
-    const tare = find(/\bTARE\b/);
-    const payload = find(/\bPAYLOAD\b|NET\s*WEIGHT/);
-    const cuCap = find(/CU\.?\s*CAP|CUBIC/);
-    fields.mgw = { value: numberAfter(mgw, 'MGW|GROSS\\s*WEIGHT') ?? '', unit: 'KG', confidence: mgw?.mean };
-    fields.tare = { value: numberAfter(tare, 'TARE') ?? '', unit: 'KG', confidence: tare?.mean };
-    fields.payload = { value: numberAfter(payload, 'PAYLOAD|NET\\s*WEIGHT') ?? '', unit: 'KG', confidence: payload?.mean };
-    fields.cuCap = { value: numberAfter(cuCap, 'CU\\.?\\s*CAP|CUBIC') ?? '', unit: 'CU.M', confidence: cuCap?.mean };
+    const isoLine = find(/\b[0-9]{2}[A-Z][0-9A-Z]\b/);
+    if (isoLine) {
+      fields.isoCode = { value: isoLine.normalized.match(/\b[0-9]{2}[A-Z][0-9A-Z]\b/)![0], confidence: isoLine.mean };
+    }
+
+    const weightAfter = (label: RegExp, unit: 'KG' | 'LB') => {
+      const labelIndex = text.findIndex((line) => label.test(line.normalized));
+      if (labelIndex < 0) return undefined;
+      const nearby = text.slice(labelIndex, labelIndex + 4);
+      for (const line of nearby) {
+        const match = line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unit}`));
+        if (match) {
+          return { value: match[1].replace(/[, .]/g, ''), confidence: line.mean };
+        }
+      }
+      return undefined;
+    };
+    const mpgmKg = weightAfter(/\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT/, 'KG');
+    const mpgmLb = weightAfter(/\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT/, 'LB');
+    const tareKg = weightAfter(/\bTARE\b/, 'KG');
+    const tareLb = weightAfter(/\bTARE\b/, 'LB');
+    const payloadKg = weightAfter(/\bPAYLOAD\b|NET\s*WEIGHT/, 'KG');
+    const payloadLb = weightAfter(/\bPAYLOAD\b|NET\s*WEIGHT/, 'LB');
+    const capacityLine = find(/\bCAPACITY\b|\bCAPAC\.?\b/);
+    const capacity = capacityLine?.normalized.match(/(?:CAPACITY|CAPAC\.?)\s*:?\s*(\d[\d ,.]*)(?:\s*L\b)?/);
+    fields.mpgmKg = { value: mpgmKg?.value ?? '', unit: 'KG', confidence: mpgmKg?.confidence };
+    fields.mpgmLb = { value: mpgmLb?.value ?? '', unit: 'LB', confidence: mpgmLb?.confidence };
+    fields.tareKg = { value: tareKg?.value ?? '', unit: 'KG', confidence: tareKg?.confidence };
+    fields.tareLb = { value: tareLb?.value ?? '', unit: 'LB', confidence: tareLb?.confidence };
+    fields.payloadKg = payloadKg
+      ? { value: payloadKg.value, unit: 'KG', confidence: payloadKg.confidence, calculated: false }
+      : this.payloadField(mpgmKg, tareKg, 'KG');
+    fields.payloadLb = payloadLb
+      ? { value: payloadLb.value, unit: 'LB', confidence: payloadLb.confidence, calculated: false }
+      : this.payloadField(mpgmLb, tareLb, 'LB');
+    fields.capacityLiters = { value: capacity?.[1].replace(/[, .]/g, '') ?? '', unit: 'L', confidence: capacityLine?.mean };
     return fields;
+  }
+
+  private payloadField(
+    gross: { value: string; confidence: number } | undefined,
+    tare: { value: string; confidence: number } | undefined,
+    unit: 'KG' | 'LB',
+  ): ContainerField {
+    if (!gross || !tare) {
+      return { value: '', unit };
+    }
+    return {
+      value: String(Number(gross.value) - Number(tare.value)),
+      unit,
+      confidence: Math.min(gross.confidence, tare.confidence),
+      calculated: true,
+    };
   }
 
   private validateContainerId(value: string): boolean {

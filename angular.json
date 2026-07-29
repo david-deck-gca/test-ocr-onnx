@@ -29,7 +29,7 @@
                 "input": "public"
               },
               {
-                "glob": "ort-wasm*.wasm",
+                "glob": "ort-wasm*.*",
                 "input": "node_modules/onnxruntime-web/dist",
                 "output": "ort"
               },

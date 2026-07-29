@@ -25,11 +25,15 @@ The package implements the matching image normalization, detector box decoding, 
 
 ## JSON contract
 
-One input image exports one JSON record. It includes source metadata, processing mode, `container.id`, `mgw`, `tare`, `payload`, `cuCap`, raw text, and warnings. Container IDs are checked against ISO 6346 format and check digit; questionable values remain visible for correction.
+One input image exports one JSON record. It includes source metadata, processing mode, `container.id`, ISO code, maximum gross weight (`mpgm`, accepting printed `MPGM` or `MGW`) and TARE in kg/lb, optional capacity in liters, calculated payload in kg/lb, raw text, and warnings. Fields remain empty when their markings are absent, except payload defaults to maximum gross weight minus TARE when it is not printed. Container IDs are checked against ISO 6346 format and check digit; questionable values remain visible for correction.
 
 ## Offline deployment
 
 The Angular service worker pre-caches application files, local ONNX assets, and ONNX Runtime WASM binaries. The Nginx Docker image supplies cross-origin isolation headers for multi-threaded WASM. Initial installation requires access to the static server; after assets are cached, browser-side work is offline.
+
+## Image formats
+
+The image picker accepts `image/*`, so it supports formats the user's browser can decode. JPEG (`image/jpeg`), PNG (`image/png`), and WebP (`image/webp`) are recommended and broadly supported for OCR. GIF (`image/gif`) is accepted when supported by the browser, but only its displayed frame is useful for OCR. HEIC/HEIF support depends on the device and browser; convert those photos to JPEG if the browser cannot load them.
 
 ## Improvements backlog
 
