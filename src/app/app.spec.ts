@@ -66,4 +66,27 @@ describe('App', () => {
     expect(fields['payloadKg'].value).toBe('32350');
     expect(fields['payloadKg'].calculated).toBe(false);
   });
+
+  it('should extract standard general-purpose container markings', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string; calculated?: boolean }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'MAX.GR. 3.000 KGS 6.610 LBS', mean: 0.99 },
+      { text: 'TARE 560 KGS 1.230 LBS', mean: 0.99 },
+      { text: 'NET 2.440 KGS 5.380 LBS', mean: 0.99 },
+      { text: 'CU.CAP. 4.6 CU.M. 162 CU.FT.', mean: 0.99 },
+    ]);
+
+    expect(fields['mpgmKg'].value).toBe('3000');
+    expect(fields['mpgmLb'].value).toBe('6610');
+    expect(fields['payloadKg'].value).toBe('2440');
+    expect(fields['payloadLb'].value).toBe('5380');
+    expect(fields['payloadKg'].calculated).toBe(false);
+    expect(fields['capacityCubicMeters'].value).toBe('4.6');
+    expect(fields['capacityCubicFeet'].value).toBe('162');
+  });
+
 });

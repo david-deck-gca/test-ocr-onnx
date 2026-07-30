@@ -3,7 +3,7 @@ import Ocr from '@gutenye/ocr-browser';
 import * as ort from 'onnxruntime-web';
 
 type ProcessingMode = 'full-photo' | 'guided-crop';
-type FieldKey = 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters';
+type FieldKey = 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters' | 'capacityCubicMeters' | 'capacityCubicFeet';
 
 interface ContainerField {
   value: string;
@@ -45,6 +45,8 @@ export class App {
     payloadKg: { value: '', unit: 'KG' },
     payloadLb: { value: '', unit: 'LB' },
     capacityLiters: { value: '', unit: 'L' },
+    capacityCubicMeters: { value: '', unit: 'CU.M.' },
+    capacityCubicFeet: { value: '', unit: 'CU.FT.' },
   });
   protected readonly containerIdValid = computed(() => this.validateContainerId(this.fields().containerId.value));
   protected readonly hasImage = computed(() => this.previewUrl() !== null);
@@ -197,7 +199,11 @@ export class App {
         mpgm: { kg: fields.mpgmKg, lb: fields.mpgmLb },
         tare: { kg: fields.tareKg, lb: fields.tareLb },
         payload: { kg: fields.payloadKg, lb: fields.payloadLb },
-        capacity: { liters: fields.capacityLiters },
+        capacity: {
+          liters: fields.capacityLiters,
+          cubicMeters: fields.capacityCubicMeters,
+          cubicFeet: fields.capacityCubicFeet,
+        },
       },
       warnings,
       rawText: this.rawText(),
@@ -266,6 +272,8 @@ export class App {
       tareKg: { value: '', unit: 'KG' }, tareLb: { value: '', unit: 'LB' },
       payloadKg: { value: '', unit: 'KG' }, payloadLb: { value: '', unit: 'LB' },
       capacityLiters: { value: '', unit: 'L' },
+      capacityCubicMeters: { value: '', unit: 'CU.M.' },
+      capacityCubicFeet: { value: '', unit: 'CU.FT.' },
     };
     const text = lines.map((line) => ({ ...line, normalized: line.text.toUpperCase().replace(/[|]/g, 'I') }));
     const find = (pattern: RegExp) => text.find((line) => pattern.test(line.normalized));
@@ -290,14 +298,27 @@ export class App {
       }
       return undefined;
     };
-    const mpgmKg = weightAfter(/\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT/, 'KG');
-    const mpgmLb = weightAfter(/\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT/, 'LB');
+    const capacityAfter = (label: RegExp, unit: RegExp) => {
+      const labelIndex = text.findIndex((line) => label.test(line.normalized));
+      if (labelIndex < 0) return undefined;
+      const nearby = text.slice(labelIndex, labelIndex + 4);
+      for (const line of nearby) {
+        const match = line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unit.source}`));
+        if (match) {
+          return { value: match[1].replace(/[, ]/g, ''), confidence: line.mean };
+        }
+      }
+      return undefined;
+    };
+    const mpgmKg = weightAfter(/\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT|\bMAX\.?\s*GR\.?/, 'KG');
+    const mpgmLb = weightAfter(/\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT|\bMAX\.?\s*GR\.?/, 'LB');
     const tareKg = weightAfter(/\bTARE\b/, 'KG');
     const tareLb = weightAfter(/\bTARE\b/, 'LB');
-    const payloadKg = weightAfter(/\bPAYLOAD\b|NET\s*WEIGHT/, 'KG');
-    const payloadLb = weightAfter(/\bPAYLOAD\b|NET\s*WEIGHT/, 'LB');
-    const capacityLine = find(/\bCAPACITY\b|\bCAPAC\.?\b/);
-    const capacity = capacityLine?.normalized.match(/(?:CAPACITY|CAPAC\.?)\s*:?\s*(\d[\d ,.]*)(?:\s*L\b)?/);
+    const payloadKg = weightAfter(/\bPAYLOAD\b|\bNET(?:\s*WEIGHT)?\b/, 'KG');
+    const payloadLb = weightAfter(/\bPAYLOAD\b|\bNET(?:\s*WEIGHT)?\b/, 'LB');
+    const capacityLiters = capacityAfter(/\bCAPACITY\b|\bCAPAC\.?\b/, /L\b/);
+    const capacityCubicMeters = capacityAfter(/\bCU\.?\s*CAP\.?/, /CU\.?\s*M\.?/);
+    const capacityCubicFeet = capacityAfter(/\bCU\.?\s*CAP\.?/, /CU\.?\s*FT\.?/);
     fields.mpgmKg = { value: mpgmKg?.value ?? '', unit: 'KG', confidence: mpgmKg?.confidence };
     fields.mpgmLb = { value: mpgmLb?.value ?? '', unit: 'LB', confidence: mpgmLb?.confidence };
     fields.tareKg = { value: tareKg?.value ?? '', unit: 'KG', confidence: tareKg?.confidence };
@@ -308,7 +329,9 @@ export class App {
     fields.payloadLb = payloadLb
       ? { value: payloadLb.value, unit: 'LB', confidence: payloadLb.confidence, calculated: false }
       : this.payloadField(mpgmLb, tareLb, 'LB');
-    fields.capacityLiters = { value: capacity?.[1].replace(/[, .]/g, '') ?? '', unit: 'L', confidence: capacityLine?.mean };
+    fields.capacityLiters = { value: capacityLiters?.value ?? '', unit: 'L', confidence: capacityLiters?.confidence };
+    fields.capacityCubicMeters = { value: capacityCubicMeters?.value ?? '', unit: 'CU.M.', confidence: capacityCubicMeters?.confidence };
+    fields.capacityCubicFeet = { value: capacityCubicFeet?.value ?? '', unit: 'CU.FT.', confidence: capacityCubicFeet?.confidence };
     return fields;
   }
 
