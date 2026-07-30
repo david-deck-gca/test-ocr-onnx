@@ -141,19 +141,6 @@ export class App {
     this.cameraOpen.set(false);
   }
 
-  protected clearImage(): void {
-    this.closeCamera();
-    const current = this.previewUrl();
-    if (current) {
-      URL.revokeObjectURL(current);
-    }
-    this.previewUrl.set(null);
-    this.imageBlob.set(null);
-    this.sourceName.set('');
-    this.rawText.set([]);
-    this.status.set('Choose a container image to begin.');
-  }
-
   protected setMode(mode: ProcessingMode): void {
     this.processingMode.set(mode);
   }
