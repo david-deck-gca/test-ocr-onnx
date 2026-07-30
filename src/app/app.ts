@@ -322,7 +322,7 @@ export class App {
           return { value: numberText(closestWeight.match[1]), confidence: closestWeight.line.mean };
         }
       }
-      const nearby = text.slice(labelIndex, labelIndex + 4);
+      const nearby = text.slice(labelIndex);
       for (const line of nearby) {
         const match = line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unit}`));
         if (match) {
@@ -347,9 +347,9 @@ export class App {
     const mpgmLb = weightAfter(/\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT|\bMAX\.?\s*GR\.?/, 'LB');
     const tareKg = weightAfter(/\bTARE\b/, 'KG');
     const tareLb = weightAfter(/\bTARE\b/, 'LB');
-    const payloadKg = weightAfter(/\bPAYLOAD\b|\bNET(?:\s*WEIGHT)?\b/, 'KG');
-    const payloadLb = weightAfter(/\bPAYLOAD\b|\bNET(?:\s*WEIGHT)?\b/, 'LB');
-    const capacityLiters = capacityAfter(/\bCAPACITY\b|\bCAPAC\.?\b/, /L\b/);
+    const payloadKg = weightAfter(/\bPAY(?:LOAD|J?LAD)\b|\bNET(?:\s*WEIGHT)?\b/, 'KG');
+    const payloadLb = weightAfter(/\bPAY(?:LOAD|J?LAD)\b|\bNET(?:\s*WEIGHT)?\b/, 'LB');
+    const capacityLiters = capacityAfter(/\bCAP(?:ACITY|CITY)\b|\bCAPAC\.?\b/, /L\b/);
     const capacityCubicMeters = capacityAfter(/\bCU\.?\s*CAP\.?/, /CU\.?\s*M\.?/);
     const capacityCubicFeet = capacityAfter(/\bCU\.?\s*CAP\.?/, /CU\.?\s*FT\.?/);
     fields.mpgmKg = { value: mpgmKg?.value ?? '', unit: 'KG', confidence: mpgmKg?.confidence };
@@ -358,30 +358,14 @@ export class App {
     fields.tareLb = { value: tareLb?.value ?? '', unit: 'LB', confidence: tareLb?.confidence };
     fields.payloadKg = payloadKg
       ? { value: payloadKg.value, unit: 'KG', confidence: payloadKg.confidence, calculated: false }
-      : this.payloadField(mpgmKg, tareKg, 'KG');
+      : { value: '', unit: 'KG' };
     fields.payloadLb = payloadLb
       ? { value: payloadLb.value, unit: 'LB', confidence: payloadLb.confidence, calculated: false }
-      : this.payloadField(mpgmLb, tareLb, 'LB');
+      : { value: '', unit: 'LB' };
     fields.capacityLiters = { value: capacityLiters?.value ?? '', unit: 'L', confidence: capacityLiters?.confidence };
     fields.capacityCubicMeters = { value: capacityCubicMeters?.value ?? '', unit: 'CU.M.', confidence: capacityCubicMeters?.confidence };
     fields.capacityCubicFeet = { value: capacityCubicFeet?.value ?? '', unit: 'CU.FT.', confidence: capacityCubicFeet?.confidence };
     return fields;
-  }
-
-  private payloadField(
-    gross: { value: string; confidence: number } | undefined,
-    tare: { value: string; confidence: number } | undefined,
-    unit: 'KG' | 'LB',
-  ): ContainerField {
-    if (!gross || !tare) {
-      return { value: '', unit };
-    }
-    return {
-      value: String(Number(gross.value.replace(/[, .]/g, '')) - Number(tare.value.replace(/[, .]/g, ''))),
-      unit,
-      confidence: Math.min(gross.confidence, tare.confidence),
-      calculated: true,
-    };
   }
 
   private validateContainerId(value: string): boolean {

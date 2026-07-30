@@ -50,22 +50,22 @@
   <section class="results" aria-labelledby="results-title">
     <div class="panel-heading"><div><p class="eyebrow">03 / REVIEW</p><h2 id="results-title">Structured container data</h2></div><button class="primary" type="button" [disabled]="!hasImage()" (click)="exportJson()">Export JSON</button></div>
     <div class="field-grid">
-      <label class="wide">Container ID<input [value]="fields().containerId.value" (input)="updateField('containerId', $any($event.target).value)" placeholder="MSCU 123456 7" autocapitalize="characters" />@if (fields().containerId.value) { <small [class.valid]="containerIdValid()" [class.invalid]="!containerIdValid()">{{ containerIdValid() ? 'ISO 6346 check digit valid' : 'Check the ID or check digit' }}</small> }</label>
-      <label>ISO CODE<input [value]="fields().isoCode.value" (input)="updateField('isoCode', $any($event.target).value)" placeholder="22K2" autocapitalize="characters" /></label>
+      <label class="wide">Container ID<input [value]="fields().containerId.value" (input)="updateField('containerId', $any($event.target).value)" autocapitalize="characters" />@if (fields().containerId.value) { <small [class.valid]="containerIdValid()" [class.invalid]="!containerIdValid()">{{ containerIdValid() ? 'ISO 6346 check digit valid' : 'Check the ID or check digit' }}</small> }</label>
+      <label>ISO CODE<input [value]="fields().isoCode.value" (input)="updateField('isoCode', $any($event.target).value)" autocapitalize="characters" /></label>
       <div class="weight-row">
-        <label>MPGM / MGW / MAX.GR.<input [value]="fields().mpgmKg.value" (input)="updateField('mpgmKg', $any($event.target).value)" placeholder="36 000" /><span>KG</span></label>
-        <label>TARE<input [value]="fields().tareKg.value" (input)="updateField('tareKg', $any($event.target).value)" placeholder="3 650" /><span>KG</span></label>
-        <label>PAYLOAD / NET<input [value]="fields().payloadKg.value" (input)="updateField('payloadKg', $any($event.target).value)" placeholder="32 350" /><span>KG</span>@if (fields().payloadKg.calculated && fields().payloadKg.value) { <small>Calculated: MPGM - TARE</small> }</label>
+        <label>MPGM / MGW / MAX.GR.<input [value]="fields().mpgmKg.value" (input)="updateField('mpgmKg', $any($event.target).value)" /><span>KG</span></label>
+        <label>TARE<input [value]="fields().tareKg.value" (input)="updateField('tareKg', $any($event.target).value)" /><span>KG</span></label>
+        <label>PAYLOAD / NET<input [value]="fields().payloadKg.value" (input)="updateField('payloadKg', $any($event.target).value)" /><span>KG</span></label>
       </div>
       <div class="weight-row">
-        <label>MPGM / MGW / MAX.GR.<input [value]="fields().mpgmLb.value" (input)="updateField('mpgmLb', $any($event.target).value)" placeholder="79 365" /><span>LB</span></label>
-        <label>TARE<input [value]="fields().tareLb.value" (input)="updateField('tareLb', $any($event.target).value)" placeholder="8 047" /><span>LB</span></label>
-        <label>PAYLOAD / NET<input [value]="fields().payloadLb.value" (input)="updateField('payloadLb', $any($event.target).value)" placeholder="71 318" /><span>LB</span>@if (fields().payloadLb.calculated && fields().payloadLb.value) { <small>Calculated: MPGM - TARE</small> }</label>
+        <label>MPGM / MGW / MAX.GR.<input [value]="fields().mpgmLb.value" (input)="updateField('mpgmLb', $any($event.target).value)" /><span>LB</span></label>
+        <label>TARE<input [value]="fields().tareLb.value" (input)="updateField('tareLb', $any($event.target).value)" /><span>LB</span></label>
+        <label>PAYLOAD / NET<input [value]="fields().payloadLb.value" (input)="updateField('payloadLb', $any($event.target).value)" /><span>LB</span></label>
       </div>
       <div class="capacity-row">
-        <label>CAPACITY<input [value]="fields().capacityLiters.value" (input)="updateField('capacityLiters', $any($event.target).value)" placeholder="25 000" /><span>L</span></label>
-        <label>CU.CAP.<input [value]="fields().capacityCubicMeters.value" (input)="updateField('capacityCubicMeters', $any($event.target).value)" placeholder="4.6" /><span>CU.M.</span></label>
-        <label>CU.CAP.<input [value]="fields().capacityCubicFeet.value" (input)="updateField('capacityCubicFeet', $any($event.target).value)" placeholder="162" /><span>CU.FT.</span></label>
+        <label>CAPACITY<input [value]="fields().capacityLiters.value" (input)="updateField('capacityLiters', $any($event.target).value)" /><span>L</span></label>
+        <label>CU.CAP.<input [value]="fields().capacityCubicMeters.value" (input)="updateField('capacityCubicMeters', $any($event.target).value)" /><span>CU.M.</span></label>
+        <label>CU.CAP.<input [value]="fields().capacityCubicFeet.value" (input)="updateField('capacityCubicFeet', $any($event.target).value)" /><span>CU.FT.</span></label>
       </div>
     </div>
     <div class="raw-text"><h3>Raw detected text</h3>@if (rawText().length) { <ul>@for (line of rawText(); track line) { <li>{{ line }}</li> }</ul> } @else { <p>Detected lines will be retained here with the exported record.</p> }</div>
