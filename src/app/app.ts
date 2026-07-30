@@ -4,6 +4,7 @@ import * as ort from 'onnxruntime-web';
 
 type ProcessingMode = 'full-photo' | 'guided-crop';
 type FieldKey = 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters' | 'capacityCubicMeters' | 'capacityCubicFeet';
+type OcrLine = { text: string; mean: number; box?: number[][] };
 
 interface ContainerField {
   value: string;
@@ -265,7 +266,7 @@ export class App {
     return error instanceof Error ? error.message : String(error);
   }
 
-  private extractFields(lines: Array<{ text: string; mean: number }>): Record<FieldKey, ContainerField> {
+  private extractFields(lines: OcrLine[]): Record<FieldKey, ContainerField> {
     const fields: Record<FieldKey, ContainerField> = {
       containerId: { value: '' }, isoCode: { value: '' },
       mpgmKg: { value: '', unit: 'KG' }, mpgmLb: { value: '', unit: 'LB' },
@@ -287,13 +288,45 @@ export class App {
     }
 
     const weightAfter = (label: RegExp, unit: 'KG' | 'LB') => {
+      const numberText = (value: string) => value.trim();
+      const labeledWeight = text
+        .map((line) => ({ line, match: line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unit}`)) }))
+        .filter(({ line, match }) => label.test(line.normalized) && match)
+        .sort((first, second) => second.line.mean - first.line.mean)[0];
+      if (labeledWeight?.match) {
+        return { value: numberText(labeledWeight.match[1]), confidence: labeledWeight.line.mean };
+      }
       const labelIndex = text.findIndex((line) => label.test(line.normalized));
       if (labelIndex < 0) return undefined;
+      const labelLine = text[labelIndex];
+      const center = (line: OcrLine) => {
+        if (!line.box?.length) return undefined;
+        const [x, y] = line.box.reduce(([totalX, totalY], [pointX, pointY]) => [totalX + pointX, totalY + pointY], [0, 0]);
+        return [x / line.box.length, y / line.box.length] as const;
+      };
+      const labelCenter = center(labelLine);
+      if (labelCenter) {
+        const closestWeight = text
+          .map((line) => ({ line, match: line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unit}`)), center: center(line) }))
+          .filter(({ match, center }) => match && center)
+          .sort((first, second) => {
+            // Container markings list a label before its weight rows; an earlier row belongs to the preceding label.
+            const firstAboveLabel = first.center![1] < labelCenter[1] - 4;
+            const secondAboveLabel = second.center![1] < labelCenter[1] - 4;
+            if (firstAboveLabel !== secondAboveLabel) return firstAboveLabel ? 1 : -1;
+            const firstDistance = Math.abs(first.center![1] - labelCenter[1]) * 10 + Math.abs(first.center![0] - labelCenter[0]);
+            const secondDistance = Math.abs(second.center![1] - labelCenter[1]) * 10 + Math.abs(second.center![0] - labelCenter[0]);
+            return firstDistance - secondDistance;
+          })[0];
+        if (closestWeight?.match) {
+          return { value: numberText(closestWeight.match[1]), confidence: closestWeight.line.mean };
+        }
+      }
       const nearby = text.slice(labelIndex, labelIndex + 4);
       for (const line of nearby) {
         const match = line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unit}`));
         if (match) {
-          return { value: match[1].replace(/[, .]/g, ''), confidence: line.mean };
+          return { value: numberText(match[1]), confidence: line.mean };
         }
       }
       return undefined;
@@ -305,7 +338,7 @@ export class App {
       for (const line of nearby) {
         const match = line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unit.source}`));
         if (match) {
-          return { value: match[1].replace(/[, ]/g, ''), confidence: line.mean };
+          return { value: match[1].trim(), confidence: line.mean };
         }
       }
       return undefined;
@@ -344,7 +377,7 @@ export class App {
       return { value: '', unit };
     }
     return {
-      value: String(Number(gross.value) - Number(tare.value)),
+      value: String(Number(gross.value.replace(/[, .]/g, '')) - Number(tare.value.replace(/[, .]/g, ''))),
       unit,
       confidence: Math.min(gross.confidence, tare.confidence),
       calculated: true,

@@ -48,7 +48,7 @@ describe('App', () => {
     expect(fields['payloadKg'].value).toBe('32350');
     expect(fields['payloadLb'].value).toBe('71318');
     expect(fields['payloadKg'].calculated).toBe(true);
-    expect(fields['capacityLiters'].value).toBe('25000');
+    expect(fields['capacityLiters'].value).toBe('25,000');
   });
 
   it('should preserve a printed payload instead of labeling it calculated', () => {
@@ -67,6 +67,21 @@ describe('App', () => {
     expect(fields['payloadKg'].calculated).toBe(false);
   });
 
+  it('should select the TARE value closest to its label', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number; box?: number[][] }>): Record<string, { value: string }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'TARE', mean: 0.9, box: [[0, 100], [40, 100], [40, 120], [0, 120]] },
+      { text: '79365 LB', mean: 0.8, box: [[100, 80], [180, 80], [180, 100], [100, 100]] },
+      { text: '8047 LB', mean: 0.99, box: [[100, 120], [180, 120], [180, 140], [100, 140]] },
+    ]);
+
+    expect(fields['tareLb'].value).toBe('8047');
+  });
+
   it('should extract standard general-purpose container markings', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -80,10 +95,10 @@ describe('App', () => {
       { text: 'CU.CAP. 4.6 CU.M. 162 CU.FT.', mean: 0.99 },
     ]);
 
-    expect(fields['mpgmKg'].value).toBe('3000');
-    expect(fields['mpgmLb'].value).toBe('6610');
-    expect(fields['payloadKg'].value).toBe('2440');
-    expect(fields['payloadLb'].value).toBe('5380');
+    expect(fields['mpgmKg'].value).toBe('3.000');
+    expect(fields['mpgmLb'].value).toBe('6.610');
+    expect(fields['payloadKg'].value).toBe('2.440');
+    expect(fields['payloadLb'].value).toBe('5.380');
     expect(fields['payloadKg'].calculated).toBe(false);
     expect(fields['capacityCubicMeters'].value).toBe('4.6');
     expect(fields['capacityCubicFeet'].value).toBe('162');
