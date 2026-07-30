@@ -347,8 +347,9 @@ export class App {
     const mpgmLb = weightAfter(/\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT|\bMAX\.?\s*GR\.?/, 'LB');
     const tareKg = weightAfter(/\bTARE\b/, 'KG');
     const tareLb = weightAfter(/\bTARE\b/, 'LB');
-    const payloadKg = weightAfter(/\bPAY(?:LOAD|J?LAD)\b|\bNET(?:\s*WEIGHT)?\b/, 'KG');
-    const payloadLb = weightAfter(/\bPAY(?:LOAD|J?LAD)\b|\bNET(?:\s*WEIGHT)?\b/, 'LB');
+    const payloadLabel = /\bPAY(?:LOAD|J?LAD|JLOAD)(?=\s|\d|$)|\bNET(?:\s*WEIGHT)?\b/;
+    const payloadKg = weightAfter(payloadLabel, 'KG');
+    const payloadLb = weightAfter(payloadLabel, 'LB');
     const capacityLiters = capacityAfter(/\bCAP(?:ACITY|CITY)\b|\bCAPAC\.?\b/, /L\b/);
     const capacityCubicMeters = capacityAfter(/\bCU\.?\s*CAP\.?/, /CU\.?\s*M\.?/);
     const capacityCubicFeet = capacityAfter(/\bCU\.?\s*CAP\.?/, /CU\.?\s*FT\.?/);

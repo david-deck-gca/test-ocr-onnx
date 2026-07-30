@@ -83,12 +83,25 @@ describe('App', () => {
     };
 
     const fields = app.extractFields([
-      { text: 'Payjlad 32.350 KG', mean: 0.99 },
+      { text: 'Payjload 32.350 KG', mean: 0.99 },
       { text: 'Capcity 25,000 L', mean: 0.99 },
     ]);
 
     expect(fields['payloadKg'].value).toBe('32.350');
     expect(fields['capacityLiters'].value).toBe('25,000');
+  });
+
+  it('should extract a payload when OCR joins its misspelled label to the value', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'Payjlad3.350KG', mean: 0.78 },
+    ]);
+
+    expect(fields['payloadKg'].value).toBe('3.350');
   });
 
   it('should preserve a payload returned several OCR lines after its label', () => {
