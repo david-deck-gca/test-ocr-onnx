@@ -158,6 +158,26 @@ describe('App', () => {
     expect(fields['tareLb'].value).toBe('8047');
   });
 
+  it('should cautiously recover missing tare and net rows after a detected gross-weight row', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string; inferred?: boolean }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'MAX.GR. 3.000 KG 6.610 LB', mean: 0.99 },
+      { text: '670 KG 1.477 LB', mean: 0.92 },
+      { text: '2.330 KG 5.133 LB', mean: 0.91 },
+    ]);
+
+    expect(fields['tareKg'].value).toBe('670');
+    expect(fields['tareLb'].value).toBe('1.477');
+    expect(fields['tareKg'].inferred).toBe(true);
+    expect(fields['payloadKg'].value).toBe('2.330');
+    expect(fields['payloadLb'].value).toBe('5.133');
+    expect(fields['payloadKg'].inferred).toBe(true);
+  });
+
   it('should extract standard general-purpose container markings', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {

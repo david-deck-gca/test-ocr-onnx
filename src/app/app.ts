@@ -12,6 +12,7 @@ interface ContainerField {
   unit?: string;
   confidence?: number;
   calculated?: boolean;
+  inferred?: boolean;
 }
 
 interface Diagnostic {
@@ -197,8 +198,21 @@ export class App {
     try {
       this.status.set('Loading local PaddleOCR models...');
       const ocr = await this.getOcr();
-      this.status.set('Detecting painted text regions...');
-      const lines = await ocr.detect(imageUrl);
+      this.status.set(this.processingMode() === 'guided-crop' ? 'Preparing enlarged marking crops...' : 'Detecting painted text regions...');
+      const passes = await this.createOcrPasses(image, imageUrl);
+      const lines = this.deduplicateLines((await Promise.all(passes.map(async (pass) => {
+        try {
+          const detected = await ocr.detect(pass.url);
+          return detected.map((line) => ({
+            ...line,
+            box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
+          }));
+        } finally {
+          if (pass.revokeUrl) {
+            URL.revokeObjectURL(pass.url);
+          }
+        }
+      }))).flat());
       const rawText = lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`);
       this.rawText.set(rawText);
       const fields = this.extractFields(lines);
@@ -290,6 +304,60 @@ export class App {
 
   private errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+  }
+
+  private async createOcrPasses(image: Blob, imageUrl: string): Promise<Array<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }>> {
+    if (this.processingMode() === 'full-photo') {
+      return [{ url: imageUrl, offsetX: 0, offsetY: 0, scale: 1, revokeUrl: false }];
+    }
+
+    const bitmap = await createImageBitmap(image);
+    try {
+      const overlap = 0.12;
+      const passes = [
+        { x: 0, y: 0, width: 0.5 + overlap, height: 0.5 + overlap },
+        { x: 0.5 - overlap, y: 0, width: 0.5 + overlap, height: 0.5 + overlap },
+        { x: 0, y: 0.5 - overlap, width: 0.5 + overlap, height: 0.5 + overlap },
+        { x: 0.5 - overlap, y: 0.5 - overlap, width: 0.5 + overlap, height: 0.5 + overlap },
+      ];
+      return await Promise.all(passes.map(async (pass) => {
+        const sourceX = Math.round(pass.x * bitmap.width);
+        const sourceY = Math.round(pass.y * bitmap.height);
+        const sourceWidth = Math.min(bitmap.width - sourceX, Math.round(pass.width * bitmap.width));
+        const sourceHeight = Math.min(bitmap.height - sourceY, Math.round(pass.height * bitmap.height));
+        const scale = 2;
+        const canvas = document.createElement('canvas');
+        canvas.width = sourceWidth * scale;
+        canvas.height = sourceHeight * scale;
+        const context = canvas.getContext('2d');
+        if (!context) {
+          throw new Error('Canvas 2D context is unavailable.');
+        }
+        context.filter = 'contrast(145%) grayscale(100%)';
+        context.drawImage(bitmap, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+        const crop = await new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => {
+          if (blob) resolve(blob);
+          else reject(new Error('Guided crop could not be created.'));
+        }, 'image/png'));
+        return { url: URL.createObjectURL(crop), offsetX: sourceX, offsetY: sourceY, scale, revokeUrl: true };
+      }));
+    } finally {
+      bitmap.close();
+    }
+  }
+
+  private deduplicateLines(lines: OcrLine[]): OcrLine[] {
+    const retained: OcrLine[] = [];
+    for (const line of lines) {
+      const normalized = line.text.replace(/\s/g, '').toUpperCase();
+      const duplicate = retained.find((existing) => existing.text.replace(/\s/g, '').toUpperCase() === normalized);
+      if (!duplicate) {
+        retained.push(line);
+      } else if (line.mean > duplicate.mean) {
+        retained[retained.indexOf(duplicate)] = line;
+      }
+    }
+    return retained;
   }
 
   private createJsonPayload() {
@@ -442,12 +510,44 @@ export class App {
     fields.payloadLb = payloadLb
       ? { value: payloadLb.value, unit: 'LB', confidence: payloadLb.confidence, calculated: false }
       : { value: '', unit: 'LB' };
+    this.recoverMissingWeightRows(fields, text);
     fields.calculatedPayloadKg = this.calculatePayload(fields.payloadKg, fields.mpgmKg, fields.tareKg, 'KG');
     fields.calculatedPayloadLb = this.calculatePayload(fields.payloadLb, fields.mpgmLb, fields.tareLb, 'LB');
     fields.capacityLiters = { value: capacityLiters?.value ?? '', unit: 'L', confidence: capacityLiters?.confidence };
     fields.capacityCubicMeters = { value: capacityCubicMeters?.value ?? '', unit: 'CU.M.', confidence: capacityCubicMeters?.confidence };
     fields.capacityCubicFeet = { value: capacityCubicFeet?.value ?? '', unit: 'CU.FT.', confidence: capacityCubicFeet?.confidence };
     return fields;
+  }
+
+  private recoverMissingWeightRows(fields: Record<FieldKey, ContainerField>, lines: Array<OcrLine & { normalized: string }>): void {
+    const hasGrossLabel = lines.some((line) => /\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT|\bMAX\.?\s*GR\.?/.test(line.normalized));
+    const hasTareLabel = lines.some((line) => /\bTARE\b/.test(line.normalized));
+    const hasPayloadLabel = lines.some((line) => /\bPAY(?:LOAD|J?LAD|JLOAD)(?=\s|\d|$)|\bNET(?:\s*WEIGHT)?\b/.test(line.normalized));
+    // A complete pair of unlabeled rows after gross weight is the only safe layout
+    // to recover. A single missing label could simply mean no such marking exists.
+    if (!hasGrossLabel || hasTareLabel || hasPayloadLabel) {
+      return;
+    }
+    const unlabeledRows = lines
+      .filter((line) => !/\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT|\bMAX\.?\s*GR\.?|\bTARE\b|\bPAY(?:LOAD|J?LAD|JLOAD)(?=\s|\d|$)|\bNET(?:\s*WEIGHT)?\b/.test(line.normalized))
+      .map((line) => ({
+        line,
+        kg: line.normalized.match(/(\d[\d ,.]*)\s*KG/),
+        lb: line.normalized.match(/(\d[\d ,.]*)\s*LB/),
+        y: line.box ? line.box.reduce((total, [, y]) => total + y, 0) / line.box.length : Number.NaN,
+      }))
+      .filter((row) => row.kg || row.lb)
+      .sort((first, second) => Number.isNaN(first.y) || Number.isNaN(second.y) ? 0 : first.y - second.y);
+    const recover = (row: typeof unlabeledRows[number] | undefined, key: 'tareKg' | 'payloadKg', match: RegExpMatchArray | null) => {
+      if (row && match && !fields[key].value) {
+        fields[key] = { value: match[1].trim(), unit: 'KG', confidence: row.line.mean, inferred: true, calculated: false };
+      }
+    };
+    recover(unlabeledRows[0], 'tareKg', unlabeledRows[0]?.kg ?? null);
+    if (unlabeledRows[0]?.lb && !fields.tareLb.value) fields.tareLb = { value: unlabeledRows[0].lb[1].trim(), unit: 'LB', confidence: unlabeledRows[0].line.mean, inferred: true };
+    const payloadRow = unlabeledRows[1];
+    recover(payloadRow, 'payloadKg', payloadRow?.kg ?? null);
+    if (payloadRow?.lb && !fields.payloadLb.value) fields.payloadLb = { value: payloadRow.lb[1].trim(), unit: 'LB', confidence: payloadRow.line.mean, inferred: true, calculated: false };
   }
 
   private calculatePayload(payload: ContainerField, mpgm: ContainerField, tare: ContainerField, unit: 'KG' | 'LB'): ContainerField {

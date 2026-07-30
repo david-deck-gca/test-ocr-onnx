@@ -37,9 +37,10 @@ The image picker accepts `image/*`, so it supports formats the user's browser ca
 
 ## Improvements backlog
 
-1. Complete and test PaddleOCR ONNX preprocessing and postprocessing with real container images.
+1. High priority: add a manual rectangle crop editor with a preview, OCR of the selected region, and saved crop coordinates. This is the reliable fallback for difficult or oblique marking panels.
 2. Add a four-corner crop editor and text-region overlays.
-3. Add tiled/multi-scale detection and controlled contrast, glare, and denoise variants.
-4. Add curved-text unwarping after measuring failure cases on representative container photos.
-5. Add a sample-image evaluation set and field-level accuracy benchmark.
-6. Add model-version switching and offline cache status management.
+3. Complete and test PaddleOCR ONNX preprocessing and postprocessing with real container images.
+4. Add tiled/multi-scale detection and controlled contrast, glare, and denoise variants.
+5. Add curved-text unwarping after measuring failure cases on representative container photos.
+6. Add a sample-image evaluation set and field-level accuracy benchmark.
+7. Add model-version switching and offline cache status management.

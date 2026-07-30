@@ -38,8 +38,8 @@
     <section class="workflow-panel" aria-labelledby="workflow-title">
       <div class="panel-heading"><div><p class="eyebrow">02 / OCR</p><h2 id="workflow-title">Processing approach</h2></div></div>
       <div class="mode-options" role="radiogroup" aria-label="Processing mode">
-        <button type="button" [class.selected]="processingMode() === 'full-photo'" (click)="setMode('full-photo')" role="radio" [attr.aria-checked]="processingMode() === 'full-photo'"><strong>Full photo</strong><span>Read all visible painted text.</span></button>
-        <button type="button" [class.selected]="processingMode() === 'guided-crop'" (click)="setMode('guided-crop')" role="radio" [attr.aria-checked]="processingMode() === 'guided-crop'"><strong>Guided crop</strong><span>Prioritize the closest group of markings.</span></button>
+        <button type="button" [class.selected]="processingMode() === 'full-photo'" (click)="setMode('full-photo')" role="radio" [attr.aria-checked]="processingMode() === 'full-photo'"><strong>Quick scan</strong><span>Faster but less accurate</span></button>
+        <button type="button" [class.selected]="processingMode() === 'guided-crop'" (click)="setMode('guided-crop')" role="radio" [attr.aria-checked]="processingMode() === 'guided-crop'"><strong>Enhanced scan</strong><span>Slower but more accurate</span></button>
       </div>
       <div class="status" [class.busy]="processing()"><span></span><p>{{ status() }}</p></div>
       <button class="primary run-button" type="button" [disabled]="!hasImage() || processing()" (click)="processImage()">{{ processing() ? 'Processing locally...' : 'Run local OCR' }}</button>
@@ -54,14 +54,14 @@
       <label>ISO CODE<input [value]="fields().isoCode.value" (input)="updateField('isoCode', $any($event.target).value)" autocapitalize="characters" /></label>
       <div class="weight-row">
         <label>@if (detectedMarkings().mpgm) { <u>MPGM</u> } @else { MPGM } / @if (detectedMarkings().mgw) { <u>MGW</u> } @else { MGW } / @if (detectedMarkings().maxGr) { <u>MAX.GR.</u> } @else { MAX.GR. }<input [value]="fields().mpgmKg.value" (input)="updateField('mpgmKg', $any($event.target).value)" /><span>KG</span></label>
-        <label>TARE<input [value]="fields().tareKg.value" (input)="updateField('tareKg', $any($event.target).value)" /><span>KG</span></label>
-        <label>DETECTED @if (detectedMarkings().payload) { <u>PAYLOAD</u> } @else { PAYLOAD } / @if (detectedMarkings().net) { <u>NET</u> } @else { NET }<input [value]="fields().payloadKg.value" (input)="updateField('payloadKg', $any($event.target).value)" /><span>KG</span></label>
+        <label>TARE<input [value]="fields().tareKg.value" (input)="updateField('tareKg', $any($event.target).value)" /><span>KG</span>@if (fields().tareKg.inferred) { <small>Inferred row</small> }</label>
+        <label>DETECTED @if (detectedMarkings().payload) { <u>PAYLOAD</u> } @else { PAYLOAD } / @if (detectedMarkings().net) { <u>NET</u> } @else { NET }<input [value]="fields().payloadKg.value" (input)="updateField('payloadKg', $any($event.target).value)" /><span>KG</span>@if (fields().payloadKg.inferred) { <small>Inferred row</small> }</label>
         <label>CALCULATED PAYLOAD / NET<input [value]="fields().calculatedPayloadKg.value" readonly /><span>KG</span></label>
       </div>
       <div class="weight-row">
         <label>@if (detectedMarkings().mpgm) { <u>MPGM</u> } @else { MPGM } / @if (detectedMarkings().mgw) { <u>MGW</u> } @else { MGW } / @if (detectedMarkings().maxGr) { <u>MAX.GR.</u> } @else { MAX.GR. }<input [value]="fields().mpgmLb.value" (input)="updateField('mpgmLb', $any($event.target).value)" /><span>LB</span></label>
-        <label>TARE<input [value]="fields().tareLb.value" (input)="updateField('tareLb', $any($event.target).value)" /><span>LB</span></label>
-        <label>DETECTED @if (detectedMarkings().payload) { <u>PAYLOAD</u> } @else { PAYLOAD } / @if (detectedMarkings().net) { <u>NET</u> } @else { NET }<input [value]="fields().payloadLb.value" (input)="updateField('payloadLb', $any($event.target).value)" /><span>LB</span></label>
+        <label>TARE<input [value]="fields().tareLb.value" (input)="updateField('tareLb', $any($event.target).value)" /><span>LB</span>@if (fields().tareLb.inferred) { <small>Inferred row</small> }</label>
+        <label>DETECTED @if (detectedMarkings().payload) { <u>PAYLOAD</u> } @else { PAYLOAD } / @if (detectedMarkings().net) { <u>NET</u> } @else { NET }<input [value]="fields().payloadLb.value" (input)="updateField('payloadLb', $any($event.target).value)" /><span>LB</span>@if (fields().payloadLb.inferred) { <small>Inferred row</small> }</label>
         <label>CALCULATED PAYLOAD / NET<input [value]="fields().calculatedPayloadLb.value" readonly /><span>LB</span></label>
       </div>
        @if (detectedMarkings().payload || detectedMarkings().net) {
