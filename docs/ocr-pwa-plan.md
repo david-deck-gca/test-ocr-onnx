@@ -25,7 +25,7 @@ The package implements the matching image normalization, detector box decoding, 
 
 ## JSON contract
 
-One input image exports one JSON record. It includes source metadata, processing mode, `container.id`, ISO code, maximum gross weight (`mpgm`, accepting printed `MPGM`, `MGW`, or `MAX.GR.`) and TARE in kg/lb, optional capacity in liters or separate cubic-meter and cubic-foot fields, calculated payload in kg/lb, raw text, and warnings. Fields remain empty when their markings are absent, except payload defaults to maximum gross weight minus TARE when it is not printed. Container IDs are checked against ISO 6346 format and check digit; questionable values remain visible for correction.
+One input image exports one JSON record. It includes source metadata, processing mode, `container.id`, ISO code, maximum gross weight (`mpgm`, accepting printed `MPGM`, `MGW`, or `MAX.GR.`) and TARE in kg/lb, optional capacity in liters or separate cubic-meter and cubic-foot fields, raw text, and warnings. When payload is printed, the review UI also calculates `MPGM - TARE`; the user selects either the detected or calculated payload for export, recorded as `container.payload.source`. Fields remain empty when their markings are absent. Container IDs are checked against ISO 6346 format and check digit; questionable values remain visible for correction.
 
 ## Offline deployment
 

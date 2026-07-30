@@ -26,7 +26,7 @@ describe('App', () => {
     fixture.detectChanges();
 
     const compiled = fixture.nativeElement as HTMLElement;
-    const inputs = Array.from(compiled.querySelectorAll<HTMLInputElement>('.field-grid input'));
+    const inputs = Array.from(compiled.querySelectorAll<HTMLInputElement>('.field-grid input:not([type="radio"])'));
     expect(inputs.every((input) => input.value === '' && input.placeholder === '')).toBe(true);
   });
 
@@ -56,6 +56,8 @@ describe('App', () => {
     expect(fields['tareLb'].value).toBe('8047');
     expect(fields['payloadKg'].value).toBe('');
     expect(fields['payloadLb'].value).toBe('');
+    expect(fields['calculatedPayloadKg'].value).toBe('');
+    expect(fields['calculatedPayloadLb'].value).toBe('');
     expect(fields['payloadKg'].calculated).toBeUndefined();
     expect(fields['capacityLiters'].value).toBe('25,000');
   });
@@ -74,6 +76,8 @@ describe('App', () => {
 
     expect(fields['payloadKg'].value).toBe('32350');
     expect(fields['payloadKg'].calculated).toBe(false);
+    expect(fields['calculatedPayloadKg'].value).toBe('32350');
+    expect(fields['calculatedPayloadKg'].calculated).toBe(true);
   });
 
   it('should recognize common OCR variants of payload and capacity labels', () => {
@@ -158,6 +162,8 @@ describe('App', () => {
     expect(fields['payloadKg'].value).toBe('2.440');
     expect(fields['payloadLb'].value).toBe('5.380');
     expect(fields['payloadKg'].calculated).toBe(false);
+    expect(fields['calculatedPayloadKg'].value).toBe('2440');
+    expect(fields['calculatedPayloadLb'].value).toBe('5380');
     expect(fields['capacityCubicMeters'].value).toBe('4.6');
     expect(fields['capacityCubicFeet'].value).toBe('162');
   });
