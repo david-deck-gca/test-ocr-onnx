@@ -64,7 +64,9 @@
         <label>DETECTED @if (detectedMarkings().payload) { <u>PAYLOAD</u> } @else { PAYLOAD } / @if (detectedMarkings().net) { <u>NET</u> } @else { NET }<input [value]="fields().payloadLb.value" (input)="updateField('payloadLb', $any($event.target).value)" /><span>LB</span></label>
         <label>CALCULATED PAYLOAD / NET<input [value]="fields().calculatedPayloadLb.value" readonly /><span>LB</span></label>
       </div>
-      <fieldset class="payload-export-choice"><legend>Payload value for JSON export</legend><label><input type="radio" name="payload-export-source" [checked]="payloadExportSource() === 'detected'" (change)="setPayloadExportSource('detected')" /> Detected OCR value</label><label><input type="radio" name="payload-export-source" [checked]="payloadExportSource() === 'calculated'" [disabled]="!canExportCalculatedPayload()" (change)="setPayloadExportSource('calculated')" /> Calculated MPGM - TARE value</label></fieldset>
+       @if (detectedMarkings().payload || detectedMarkings().net) {
+         <fieldset class="payload-export-choice"><legend>Payload value for JSON export</legend><label><input type="radio" name="payload-export-source" [checked]="payloadExportSource() === 'detected'" (change)="setPayloadExportSource('detected')" /> Detected OCR value</label><label><input type="radio" name="payload-export-source" [checked]="payloadExportSource() === 'calculated'" [disabled]="!canExportCalculatedPayload()" (change)="setPayloadExportSource('calculated')" /> Calculated MPGM - TARE value</label></fieldset>
+       }
       <div class="capacity-row">
         <label>CAPACITY<input [value]="fields().capacityLiters.value" (input)="updateField('capacityLiters', $any($event.target).value)" /><span>L</span></label>
         <label>CU.CAP.<input [value]="fields().capacityCubicMeters.value" (input)="updateField('capacityCubicMeters', $any($event.target).value)" /><span>CU.M.</span></label>
