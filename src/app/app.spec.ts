@@ -108,6 +108,20 @@ describe('App', () => {
     expect(fields['payloadKg'].value).toBe('3.350');
   });
 
+  it('should associate each weight with its label when OCR combines payload and tare', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'Payjload3.350KG TARE:3.650KG', mean: 0.86 },
+    ]);
+
+    expect(fields['payloadKg'].value).toBe('3.350');
+    expect(fields['tareKg'].value).toBe('3.650');
+  });
+
   it('should preserve a payload returned several OCR lines after its label', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {

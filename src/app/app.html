@@ -48,21 +48,21 @@
   </section>
 
   <section class="results" aria-labelledby="results-title">
-    <div class="panel-heading"><div><p class="eyebrow">03 / REVIEW</p><h2 id="results-title">Structured container data</h2></div><button class="primary" type="button" [disabled]="!hasImage()" (click)="exportJson()">Export JSON</button></div>
+    <div class="panel-heading"><div><p class="eyebrow">03 / REVIEW</p><h2 id="results-title">Structured container data</h2></div><div class="result-actions"><button class="secondary" type="button" [disabled]="!hasImage()" (click)="saveJsonToIndexedDb()">Save</button><button class="primary" type="button" [disabled]="!hasImage()" (click)="exportJson()">Export JSON (debug)</button></div></div>
     <div class="field-grid">
       <label class="wide">Container ID<input [value]="fields().containerId.value" (input)="updateField('containerId', $any($event.target).value)" autocapitalize="characters" />@if (fields().containerId.value) { <small [class.valid]="containerIdValid()" [class.invalid]="!containerIdValid()">{{ containerIdValid() ? 'ISO 6346 check digit valid' : 'Check the ID or check digit' }}</small> }</label>
       <label>ISO CODE<input [value]="fields().isoCode.value" (input)="updateField('isoCode', $any($event.target).value)" autocapitalize="characters" /></label>
       <div class="weight-row">
-        <label>MPGM / MGW / MAX.GR.<input [value]="fields().mpgmKg.value" (input)="updateField('mpgmKg', $any($event.target).value)" /><span>KG</span></label>
+        <label>@if (detectedMarkings().mpgm) { <u>MPGM</u> } @else { MPGM } / @if (detectedMarkings().mgw) { <u>MGW</u> } @else { MGW } / @if (detectedMarkings().maxGr) { <u>MAX.GR.</u> } @else { MAX.GR. }<input [value]="fields().mpgmKg.value" (input)="updateField('mpgmKg', $any($event.target).value)" /><span>KG</span></label>
         <label>TARE<input [value]="fields().tareKg.value" (input)="updateField('tareKg', $any($event.target).value)" /><span>KG</span></label>
-        <label>DETECTED PAYLOAD / NET<input [value]="fields().payloadKg.value" (input)="updateField('payloadKg', $any($event.target).value)" /><span>KG</span></label>
-        <label>CALCULATED PAYLOAD<input [value]="fields().calculatedPayloadKg.value" readonly /><span>KG</span></label>
+        <label>DETECTED @if (detectedMarkings().payload) { <u>PAYLOAD</u> } @else { PAYLOAD } / @if (detectedMarkings().net) { <u>NET</u> } @else { NET }<input [value]="fields().payloadKg.value" (input)="updateField('payloadKg', $any($event.target).value)" /><span>KG</span></label>
+        <label>CALCULATED PAYLOAD / NET<input [value]="fields().calculatedPayloadKg.value" readonly /><span>KG</span></label>
       </div>
       <div class="weight-row">
-        <label>MPGM / MGW / MAX.GR.<input [value]="fields().mpgmLb.value" (input)="updateField('mpgmLb', $any($event.target).value)" /><span>LB</span></label>
+        <label>@if (detectedMarkings().mpgm) { <u>MPGM</u> } @else { MPGM } / @if (detectedMarkings().mgw) { <u>MGW</u> } @else { MGW } / @if (detectedMarkings().maxGr) { <u>MAX.GR.</u> } @else { MAX.GR. }<input [value]="fields().mpgmLb.value" (input)="updateField('mpgmLb', $any($event.target).value)" /><span>LB</span></label>
         <label>TARE<input [value]="fields().tareLb.value" (input)="updateField('tareLb', $any($event.target).value)" /><span>LB</span></label>
-        <label>DETECTED PAYLOAD / NET<input [value]="fields().payloadLb.value" (input)="updateField('payloadLb', $any($event.target).value)" /><span>LB</span></label>
-        <label>CALCULATED PAYLOAD<input [value]="fields().calculatedPayloadLb.value" readonly /><span>LB</span></label>
+        <label>DETECTED @if (detectedMarkings().payload) { <u>PAYLOAD</u> } @else { PAYLOAD } / @if (detectedMarkings().net) { <u>NET</u> } @else { NET }<input [value]="fields().payloadLb.value" (input)="updateField('payloadLb', $any($event.target).value)" /><span>LB</span></label>
+        <label>CALCULATED PAYLOAD / NET<input [value]="fields().calculatedPayloadLb.value" readonly /><span>LB</span></label>
       </div>
       <fieldset class="payload-export-choice"><legend>Payload value for JSON export</legend><label><input type="radio" name="payload-export-source" [checked]="payloadExportSource() === 'detected'" (change)="setPayloadExportSource('detected')" /> Detected OCR value</label><label><input type="radio" name="payload-export-source" [checked]="payloadExportSource() === 'calculated'" [disabled]="!canExportCalculatedPayload()" (change)="setPayloadExportSource('calculated')" /> Calculated MPGM - TARE value</label></fieldset>
       <div class="capacity-row">

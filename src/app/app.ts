@@ -54,7 +54,17 @@ export class App {
   });
   protected readonly containerIdValid = computed(() => this.validateContainerId(this.fields().containerId.value));
   protected readonly hasImage = computed(() => this.previewUrl() !== null);
-  protected readonly payloadExportSource = signal<PayloadExportSource>('detected');
+  protected readonly detectedMarkings = computed(() => {
+    const text = this.rawText().join('\n').toUpperCase();
+    return {
+      mpgm: /\bMPGM\b/.test(text),
+      mgw: /\bMGW\b/.test(text),
+      maxGr: /\bMAX\.?\s*GR\.?/.test(text),
+      payload: /\bPAY(?:LOAD|J?LAD|JLOAD)(?=\s|\d|$)/.test(text),
+      net: /\bNET(?:\s*WEIGHT)?\b/.test(text),
+    };
+  });
+  protected readonly payloadExportSource = signal<PayloadExportSource>('calculated');
   protected readonly canExportCalculatedPayload = computed(() => Boolean(
     this.fields().calculatedPayloadKg.value || this.fields().calculatedPayloadLb.value,
   ));
@@ -191,7 +201,11 @@ export class App {
       const lines = await ocr.detect(imageUrl);
       const rawText = lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`);
       this.rawText.set(rawText);
-      this.fields.set(this.extractFields(lines));
+      const fields = this.extractFields(lines);
+      this.fields.set(fields);
+      this.payloadExportSource.set(
+        fields.calculatedPayloadKg.value || fields.calculatedPayloadLb.value ? 'calculated' : 'detected',
+      );
       this.status.set(`OCR complete. Found ${lines.length} text region${lines.length === 1 ? '' : 's'}. Review the fields before exporting.`);
       this.processing.set(false);
     } catch (error: unknown) {
@@ -201,41 +215,32 @@ export class App {
   }
 
   protected exportJson(): void {
-    const fields = this.fields();
-    const payloadSource = this.payloadExportSource();
-    const payloadKg = payloadSource === 'calculated' ? fields.calculatedPayloadKg : fields.payloadKg;
-    const payloadLb = payloadSource === 'calculated' ? fields.calculatedPayloadLb : fields.payloadLb;
-    const warnings = this.diagnostics().map((diagnostic) => `${diagnostic.stage}: ${diagnostic.message}`);
-    if (fields.containerId.value && !this.containerIdValid()) {
-      warnings.push('Container ID does not pass ISO 6346 format and check-digit validation.');
-    }
-    const payload = {
-      source: {
-        fileName: this.sourceName(),
-        processedAt: new Date().toISOString(),
-        processingMode: this.processingMode(),
-      },
-      container: {
-        id: { ...fields.containerId, iso6346Valid: this.containerIdValid() },
-        isoCode: fields.isoCode,
-        mpgm: { kg: fields.mpgmKg, lb: fields.mpgmLb },
-        tare: { kg: fields.tareKg, lb: fields.tareLb },
-        payload: { source: payloadSource, kg: payloadKg, lb: payloadLb },
-        capacity: {
-          liters: fields.capacityLiters,
-          cubicMeters: fields.capacityCubicMeters,
-          cubicFeet: fields.capacityCubicFeet,
-        },
-      },
-      warnings,
-      rawText: this.rawText(),
-    };
+    const payload = this.createJsonPayload();
     const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
     const link = document.createElement('a');
     link.href = url;
     link.download = `${this.sourceName().replace(/\.[^.]+$/, '') || 'container'}-ocr.json`;
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  protected async saveJsonToIndexedDb(): Promise<void> {
+    try {
+      const database = await this.openSavedRecordsDatabase();
+      const payload = this.createJsonPayload();
+      const id = crypto.randomUUID();
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction('records', 'readwrite');
+        transaction.objectStore('records').add({ id, savedAt: new Date().toISOString(), payload });
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+      });
+      database.close();
+      this.status.set('JSON data saved locally in IndexedDB.');
+    } catch (error: unknown) {
+      this.addDiagnostic('IndexedDB', 'JSON data could not be saved locally.', this.errorMessage(error));
+    }
   }
 
   protected dismissDiagnostics(): void {
@@ -287,6 +292,51 @@ export class App {
     return error instanceof Error ? error.message : String(error);
   }
 
+  private createJsonPayload() {
+    const fields = this.fields();
+    const payloadSource = this.payloadExportSource();
+    const payloadKg = payloadSource === 'calculated' ? fields.calculatedPayloadKg : fields.payloadKg;
+    const payloadLb = payloadSource === 'calculated' ? fields.calculatedPayloadLb : fields.payloadLb;
+    const warnings = this.diagnostics().map((diagnostic) => `${diagnostic.stage}: ${diagnostic.message}`);
+    if (fields.containerId.value && !this.containerIdValid()) {
+      warnings.push('Container ID does not pass ISO 6346 format and check-digit validation.');
+    }
+    return {
+      source: {
+        fileName: this.sourceName(),
+        processedAt: new Date().toISOString(),
+        processingMode: this.processingMode(),
+      },
+      container: {
+        id: { ...fields.containerId, iso6346Valid: this.containerIdValid() },
+        isoCode: fields.isoCode,
+        mpgm: { kg: fields.mpgmKg, lb: fields.mpgmLb },
+        tare: { kg: fields.tareKg, lb: fields.tareLb },
+        payload: { source: payloadSource, kg: payloadKg, lb: payloadLb },
+        capacity: {
+          liters: fields.capacityLiters,
+          cubicMeters: fields.capacityCubicMeters,
+          cubicFeet: fields.capacityCubicFeet,
+        },
+      },
+      warnings,
+      rawText: this.rawText(),
+    };
+  }
+
+  private openSavedRecordsDatabase(): Promise<IDBDatabase> {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open('container-mark-reader', 1);
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains('records')) {
+          request.result.createObjectStore('records', { keyPath: 'id' });
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
   private extractFields(lines: OcrLine[]): Record<FieldKey, ContainerField> {
     const fields: Record<FieldKey, ContainerField> = {
       containerId: { value: '' }, isoCode: { value: '' },
@@ -313,8 +363,14 @@ export class App {
     const weightAfter = (label: RegExp, unit: 'KG' | 'LB') => {
       const numberText = (value: string) => value.trim();
       const labeledWeight = text
-        .map((line) => ({ line, match: line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unit}`)) }))
-        .filter(({ line, match }) => label.test(line.normalized) && match)
+        .map((line) => {
+          const labelMatch = line.normalized.match(label);
+          const valueText = labelMatch?.index === undefined
+            ? undefined
+            : line.normalized.slice(labelMatch.index + labelMatch[0].length);
+          return { line, match: valueText?.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unit}`)) };
+        })
+        .filter(({ match }) => match)
         .sort((first, second) => second.line.mean - first.line.mean)[0];
       if (labeledWeight?.match) {
         return { value: numberText(labeledWeight.match[1]), confidence: labeledWeight.line.mean };
