@@ -18,7 +18,7 @@ describe('App', () => {
     const fixture = TestBed.createComponent(App);
     await fixture.whenStable();
     const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('h1')?.textContent).toContain('Read the marks');
+    expect(compiled.querySelector('#capture-title')?.textContent).toContain('Container side photo');
   });
 
   it('should render empty field values by default', () => {

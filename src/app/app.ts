@@ -272,13 +272,13 @@ export class App {
     if (this.ocr) {
       return this.ocr;
     }
-    ort.env.wasm.wasmPaths = '/ort/';
+    ort.env.wasm.wasmPaths = new URL('ort/', document.baseURI).toString();
     ort.env.wasm.numThreads = crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
     this.ocr = await Ocr.create({
       models: {
-        detectionPath: '/models/ch_PP-OCRv4_det_infer.onnx',
-        recognitionPath: '/models/ch_PP-OCRv4_rec_infer.onnx',
-        dictionaryPath: '/models/ppocr_keys_v1.txt',
+        detectionPath: new URL('models/ch_PP-OCRv4_det_infer.onnx', document.baseURI).toString(),
+        recognitionPath: new URL('models/ch_PP-OCRv4_rec_infer.onnx', document.baseURI).toString(),
+        dictionaryPath: new URL('models/ppocr_keys_v1.txt', document.baseURI).toString(),
       },
     });
     return this.ocr;
