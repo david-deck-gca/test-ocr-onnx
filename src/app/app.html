@@ -4,12 +4,6 @@
     <span class="offline-badge">Offline-ready</span>
   </header>
 
-  <section class="intro" aria-labelledby="page-title">
-    <p class="eyebrow">LOCAL OCR WORKSPACE</p>
-    <h1 id="page-title">Read the marks. Keep the image local.</h1>
-    <p>Extract container identification and capacity data from difficult side-wall photos. Processing happens in this browser.</p>
-  </section>
-
   @if (diagnostics().length) {
     <section class="diagnostics" aria-live="assertive" aria-labelledby="diagnostic-title">
       <div><p class="eyebrow">ATTENTION REQUIRED</p><h2 id="diagnostic-title">OCR diagnostic</h2></div>
@@ -22,7 +16,7 @@
 
   <section class="workspace">
     <section class="capture-panel" aria-labelledby="capture-title">
-      <div class="panel-heading"><div><p class="eyebrow">01 / IMAGE</p><h2 id="capture-title">Container side photo</h2></div>@if (hasImage()) { <button class="text-button" type="button" (click)="clearImage()">Replace image</button> }</div>
+      <div class="panel-heading"><div><p class="eyebrow">01 / IMAGE</p><h2 id="capture-title">Container side photo</h2></div></div>
       <input #fileInput type="file" accept="image/*" capture="environment" hidden (change)="selectFile($event)" />
 
       @if (cameraOpen()) {
@@ -38,8 +32,8 @@
     <section class="workflow-panel" aria-labelledby="workflow-title">
       <div class="panel-heading"><div><p class="eyebrow">02 / OCR</p><h2 id="workflow-title">Processing approach</h2></div></div>
       <div class="mode-options" role="radiogroup" aria-label="Processing mode">
-        <button type="button" [class.selected]="processingMode() === 'full-photo'" (click)="setMode('full-photo')" role="radio" [attr.aria-checked]="processingMode() === 'full-photo'"><strong>Full photo</strong><span>Read all visible painted text.</span></button>
-        <button type="button" [class.selected]="processingMode() === 'guided-crop'" (click)="setMode('guided-crop')" role="radio" [attr.aria-checked]="processingMode() === 'guided-crop'"><strong>Guided crop</strong><span>Prioritize the closest group of markings.</span></button>
+        <button type="button" [class.selected]="processingMode() === 'full-photo'" (click)="setMode('full-photo')" role="radio" [attr.aria-checked]="processingMode() === 'full-photo'"><strong>Quick scan</strong><span>Faster but less accurate</span></button>
+        <button type="button" [class.selected]="processingMode() === 'guided-crop'" (click)="setMode('guided-crop')" role="radio" [attr.aria-checked]="processingMode() === 'guided-crop'"><strong>Enhanced scan</strong><span>Slower but more accurate</span></button>
       </div>
       <div class="status" [class.busy]="processing()"><span></span><p>{{ status() }}</p></div>
       <button class="primary run-button" type="button" [disabled]="!hasImage() || processing()" (click)="processImage()">{{ processing() ? 'Processing locally...' : 'Run local OCR' }}</button>
@@ -48,13 +42,30 @@
   </section>
 
   <section class="results" aria-labelledby="results-title">
-    <div class="panel-heading"><div><p class="eyebrow">03 / REVIEW</p><h2 id="results-title">Structured container data</h2></div><button class="primary" type="button" [disabled]="!hasImage()" (click)="exportJson()">Export JSON</button></div>
+    <div class="panel-heading"><div><p class="eyebrow">03 / REVIEW</p><h2 id="results-title">Structured container data</h2></div><div class="result-actions"><button class="secondary" type="button" [disabled]="!hasImage()" (click)="saveJsonToIndexedDb()">Save</button><button class="primary" type="button" [disabled]="!hasImage()" (click)="exportJson()">Export JSON (debug)</button></div></div>
     <div class="field-grid">
-      <label class="wide">Container ID<input [value]="fields().containerId.value" (input)="updateField('containerId', $any($event.target).value)" placeholder="MSCU 123456 7" autocapitalize="characters" />@if (fields().containerId.value) { <small [class.valid]="containerIdValid()" [class.invalid]="!containerIdValid()">{{ containerIdValid() ? 'ISO 6346 check digit valid' : 'Check the ID or check digit' }}</small> }</label>
-      <label>MGW<input [value]="fields().mgw.value" (input)="updateField('mgw', $any($event.target).value)" placeholder="30 480" /><span>KG</span></label>
-      <label>TARE<input [value]="fields().tare.value" (input)="updateField('tare', $any($event.target).value)" placeholder="2 210" /><span>KG</span></label>
-      <label>PAYLOAD<input [value]="fields().payload.value" (input)="updateField('payload', $any($event.target).value)" placeholder="28 270" /><span>KG</span></label>
-      <label>CU.CAP<input [value]="fields().cuCap.value" (input)="updateField('cuCap', $any($event.target).value)" placeholder="33.2" /><span>CU.M</span></label>
+      <label class="wide">Container ID<input [value]="fields().containerId.value" (input)="updateField('containerId', $any($event.target).value)" autocapitalize="characters" />@if (fields().containerId.value) { <small [class.valid]="containerIdValid()" [class.invalid]="!containerIdValid()">{{ containerIdValid() ? 'ISO 6346 check digit valid' : 'Check the ID or check digit' }}</small> }</label>
+      <label>ISO CODE<input [value]="fields().isoCode.value" (input)="updateField('isoCode', $any($event.target).value)" autocapitalize="characters" /></label>
+      <div class="weight-row">
+        <label>@if (detectedMarkings().mpgm) { <u>MPGM</u> } @else { MPGM } / @if (detectedMarkings().mgw) { <u>MGW</u> } @else { MGW } / @if (detectedMarkings().maxGr) { <u>MAX.GR.</u> } @else { MAX.GR. }<input [value]="fields().mpgmKg.value" (input)="updateField('mpgmKg', $any($event.target).value)" /><span>KG</span></label>
+        <label>TARE<input [value]="fields().tareKg.value" (input)="updateField('tareKg', $any($event.target).value)" /><span>KG</span>@if (fields().tareKg.inferred) { <small>Inferred row</small> }</label>
+        <label>DETECTED @if (detectedMarkings().payload) { <u>PAYLOAD</u> } @else { PAYLOAD } / @if (detectedMarkings().net) { <u>NET</u> } @else { NET }<input [value]="fields().payloadKg.value" (input)="updateField('payloadKg', $any($event.target).value)" /><span>KG</span>@if (fields().payloadKg.inferred) { <small>Inferred row</small> }</label>
+        <label>CALCULATED PAYLOAD / NET<input [value]="fields().calculatedPayloadKg.value" readonly /><span>KG</span></label>
+      </div>
+      <div class="weight-row">
+        <label>@if (detectedMarkings().mpgm) { <u>MPGM</u> } @else { MPGM } / @if (detectedMarkings().mgw) { <u>MGW</u> } @else { MGW } / @if (detectedMarkings().maxGr) { <u>MAX.GR.</u> } @else { MAX.GR. }<input [value]="fields().mpgmLb.value" (input)="updateField('mpgmLb', $any($event.target).value)" /><span>LB</span></label>
+        <label>TARE<input [value]="fields().tareLb.value" (input)="updateField('tareLb', $any($event.target).value)" /><span>LB</span>@if (fields().tareLb.inferred) { <small>Inferred row</small> }</label>
+        <label>DETECTED @if (detectedMarkings().payload) { <u>PAYLOAD</u> } @else { PAYLOAD } / @if (detectedMarkings().net) { <u>NET</u> } @else { NET }<input [value]="fields().payloadLb.value" (input)="updateField('payloadLb', $any($event.target).value)" /><span>LB</span>@if (fields().payloadLb.inferred) { <small>Inferred row</small> }</label>
+        <label>CALCULATED PAYLOAD / NET<input [value]="fields().calculatedPayloadLb.value" readonly /><span>LB</span></label>
+      </div>
+       @if (detectedMarkings().payload || detectedMarkings().net) {
+         <fieldset class="payload-export-choice"><legend>Payload value for JSON export</legend><label><input type="radio" name="payload-export-source" [checked]="payloadExportSource() === 'detected'" (change)="setPayloadExportSource('detected')" /> Detected OCR value</label><label><input type="radio" name="payload-export-source" [checked]="payloadExportSource() === 'calculated'" [disabled]="!canExportCalculatedPayload()" (change)="setPayloadExportSource('calculated')" /> Calculated MPGM - TARE value</label></fieldset>
+       }
+      <div class="capacity-row">
+        <label>CAPACITY<input [value]="fields().capacityLiters.value" (input)="updateField('capacityLiters', $any($event.target).value)" /><span>L</span></label>
+        <label>CU.CAP.<input [value]="fields().capacityCubicMeters.value" (input)="updateField('capacityCubicMeters', $any($event.target).value)" /><span>CU.M.</span></label>
+        <label>CU.CAP.<input [value]="fields().capacityCubicFeet.value" (input)="updateField('capacityCubicFeet', $any($event.target).value)" /><span>CU.FT.</span></label>
+      </div>
     </div>
     <div class="raw-text"><h3>Raw detected text</h3>@if (rawText().length) { <ul>@for (line of rawText(); track line) { <li>{{ line }}</li> }</ul> } @else { <p>Detected lines will be retained here with the exported record.</p> }</div>
   </section>
