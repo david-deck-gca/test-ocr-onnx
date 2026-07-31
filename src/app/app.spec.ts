@@ -31,6 +31,19 @@ describe('App', () => {
     expect(inputs.every((input) => input.value === '' && input.placeholder === '')).toBe(true);
   });
 
+  it('should retain selected manual crop coordinates in exported data', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      cropRect: { set(value: { x: number; y: number; width: number; height: number }): void };
+      createJsonPayload(): { source: { manualCrop: { x: number; y: number; width: number; height: number } | null } };
+    };
+    const crop = { x: 0.64, y: 0.22, width: 0.24, height: 0.12 };
+
+    app.cropRect.set(crop);
+
+    expect(app.createJsonPayload().source.manualCrop).toEqual(crop);
+  });
+
   it('should extract tank container weights without inventing a payload', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -201,6 +214,21 @@ describe('App', () => {
     expect(fields['calculatedPayloadLb'].value).toBe('5380');
     expect(fields['capacityCubicMeters'].value).toBe('4.6');
     expect(fields['capacityCubicFeet'].value).toBe('162');
+  });
+
+  it('should recover a checksum-valid container ID split across OCR regions', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number; box?: number[][] }>): Record<string, { value: string; confidence?: number }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'HCSU 799790', mean: 0.92, box: [[20, 40], [170, 40], [170, 60], [20, 60]] },
+      { text: '9', mean: 0.88, box: [[180, 40], [190, 40], [190, 60], [180, 60]] },
+    ]);
+
+    expect(fields['containerId'].value).toBe('HCSU7997909');
+    expect(fields['containerId'].confidence).toBe(0.88);
   });
 
 });

@@ -6,6 +6,7 @@ type ProcessingMode = 'full-photo' | 'guided-crop';
 type PayloadExportSource = 'detected' | 'calculated';
 type FieldKey = 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'calculatedPayloadKg' | 'calculatedPayloadLb' | 'capacityLiters' | 'capacityCubicMeters' | 'capacityCubicFeet';
 type OcrLine = { text: string; mean: number; box?: number[][] };
+type CropRect = { x: number; y: number; width: number; height: number };
 
 interface ContainerField {
   value: string;
@@ -32,6 +33,10 @@ export class App {
   protected readonly sourceName = signal('');
   protected readonly previewUrl = signal<string | null>(null);
   protected readonly imageBlob = signal<Blob | null>(null);
+  protected readonly cropEditorOpen = signal(false);
+  protected readonly cropRect = signal<CropRect | null>(null);
+  protected readonly cropDraft = signal<CropRect>({ x: 0.1, y: 0.1, width: 0.8, height: 0.8 });
+  protected readonly cropPreviewUrl = signal<string | null>(null);
   protected readonly processingMode = signal<ProcessingMode>('full-photo');
   protected readonly cameraOpen = signal(false);
   protected readonly processing = signal(false);
@@ -72,6 +77,7 @@ export class App {
 
   private stream: MediaStream | null = null;
   private ocr: Awaited<ReturnType<typeof Ocr.create>> | null = null;
+  private cropStart: { x: number; y: number } | null = null;
 
   protected openFilePicker(): void {
     this.fileInput()?.nativeElement.click();
@@ -90,6 +96,61 @@ export class App {
     }
     this.useImage(file, file.name);
     input.value = '';
+  }
+
+  protected openCropEditor(): void {
+    this.cropDraft.set(this.cropRect() ?? { x: 0.1, y: 0.1, width: 0.8, height: 0.8 });
+    this.cropEditorOpen.set(true);
+  }
+
+  protected closeCropEditor(): void {
+    this.cropStart = null;
+    this.cropEditorOpen.set(false);
+  }
+
+  protected startCrop(event: PointerEvent): void {
+    const point = this.cropPoint(event);
+    if (!point) return;
+    event.preventDefault();
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    this.cropStart = point;
+    this.cropDraft.set({ x: point.x, y: point.y, width: 0, height: 0 });
+  }
+
+  protected updateCrop(event: PointerEvent): void {
+    if (!this.cropStart) return;
+    const point = this.cropPoint(event);
+    if (!point) return;
+    const x = Math.min(this.cropStart.x, point.x);
+    const y = Math.min(this.cropStart.y, point.y);
+    this.cropDraft.set({ x, y, width: Math.abs(point.x - this.cropStart.x), height: Math.abs(point.y - this.cropStart.y) });
+  }
+
+  protected finishCrop(event: PointerEvent): void {
+    if (!this.cropStart) return;
+    this.updateCrop(event);
+    this.cropStart = null;
+    (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
+  }
+
+  protected async applyCrop(): Promise<void> {
+    const crop = this.cropDraft();
+    if (crop.width < 0.02 || crop.height < 0.02) {
+      this.addDiagnostic('Manual crop', 'Draw a larger rectangle around the marking to scan.');
+      return;
+    }
+    this.cropRect.set(crop);
+    this.cropEditorOpen.set(false);
+    await this.updateCropPreview(crop);
+    this.status.set('Manual crop ready. Run local OCR to scan only the selected region.');
+  }
+
+  protected clearCrop(): void {
+    this.cropRect.set(null);
+    const preview = this.cropPreviewUrl();
+    if (preview) URL.revokeObjectURL(preview);
+    this.cropPreviewUrl.set(null);
+    this.status.set('Manual crop removed. OCR will use the selected processing approach.');
   }
 
   protected async openCamera(): Promise<void> {
@@ -254,6 +315,10 @@ export class App {
     if (current) {
       URL.revokeObjectURL(current);
     }
+    const cropPreview = this.cropPreviewUrl();
+    if (cropPreview) {
+      URL.revokeObjectURL(cropPreview);
+    }
   }
 
   private useImage(image: Blob, name: string): void {
@@ -264,6 +329,11 @@ export class App {
     this.imageBlob.set(image);
     this.previewUrl.set(URL.createObjectURL(image));
     this.sourceName.set(name);
+    this.cropEditorOpen.set(false);
+    this.cropRect.set(null);
+    const cropPreview = this.cropPreviewUrl();
+    if (cropPreview) URL.revokeObjectURL(cropPreview);
+    this.cropPreviewUrl.set(null);
     this.status.set('Image ready. Select a processing mode and run OCR.');
     this.rawText.set([]);
   }
@@ -294,6 +364,10 @@ export class App {
   }
 
   private async createOcrPasses(image: Blob, imageUrl: string): Promise<Array<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }>> {
+    const manualCrop = this.cropRect();
+    if (manualCrop) {
+      return [await this.createCropPass(image, manualCrop, 2)];
+    }
     if (this.processingMode() === 'full-photo') {
       return [{ url: imageUrl, offsetX: 0, offsetY: 0, scale: 1, revokeUrl: false }];
     }
@@ -333,6 +407,50 @@ export class App {
     }
   }
 
+  private cropPoint(event: PointerEvent): { x: number; y: number } | null {
+    const image = (event.currentTarget as HTMLElement).querySelector('img');
+    if (!image) return null;
+    const bounds = image.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) return null;
+    return {
+      x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
+      y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height)),
+    };
+  }
+
+  private async updateCropPreview(crop: CropRect): Promise<void> {
+    const image = this.imageBlob();
+    if (!image) return;
+    const pass = await this.createCropPass(image, crop, 1, 520);
+    const previous = this.cropPreviewUrl();
+    this.cropPreviewUrl.set(pass.url);
+    if (previous) URL.revokeObjectURL(previous);
+  }
+
+  private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumWidth?: number): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }> {
+    const bitmap = await createImageBitmap(image);
+    try {
+      const sourceX = Math.round(crop.x * bitmap.width);
+      const sourceY = Math.round(crop.y * bitmap.height);
+      const sourceWidth = Math.max(1, Math.round(crop.width * bitmap.width));
+      const sourceHeight = Math.max(1, Math.round(crop.height * bitmap.height));
+      const outputScale = maximumWidth ? Math.min(1, maximumWidth / sourceWidth) : scale;
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(sourceWidth * outputScale));
+      canvas.height = Math.max(1, Math.round(sourceHeight * outputScale));
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('Canvas 2D context is unavailable.');
+      context.drawImage(bitmap, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((result) => {
+        if (result) resolve(result);
+        else reject(new Error('Manual crop could not be created.'));
+      }, 'image/png'));
+      return { url: URL.createObjectURL(blob), offsetX: sourceX, offsetY: sourceY, scale: outputScale, revokeUrl: true };
+    } finally {
+      bitmap.close();
+    }
+  }
+
   private deduplicateLines(lines: OcrLine[]): OcrLine[] {
     const retained: OcrLine[] = [];
     for (const line of lines) {
@@ -361,6 +479,7 @@ export class App {
         fileName: this.sourceName(),
         processedAt: new Date().toISOString(),
         processingMode: this.processingMode(),
+        manualCrop: this.cropRect(),
       },
       container: {
         id: { ...fields.containerId, iso6346Valid: this.containerIdValid() },
@@ -409,6 +528,32 @@ export class App {
     const idLine = find(/[A-Z]{3}[UJZ][\s-]*\d{6}[\s-]*\d/);
     if (idLine) {
       fields.containerId = { value: idLine.normalized.match(/[A-Z]{3}[UJZ][\s-]*\d{6}[\s-]*\d/)![0].replace(/[\s-]/g, ''), confidence: idLine.mean };
+    } else {
+      const idFragments = text
+        .map((line, index) => ({
+          ...line,
+          index,
+          fragment: line.normalized.replace(/[^A-Z0-9]/g, ''),
+          center: line.box?.reduce(([totalX, totalY], [x, y]) => [totalX + x, totalY + y], [0, 0]).map((total) => total / line.box!.length),
+        }))
+        .filter((line) => line.fragment)
+        .sort((first, second) => {
+          if (!first.center || !second.center) return first.index - second.index;
+          return first.center[1] - second.center[1] || first.center[0] - second.center[0];
+        });
+      for (let start = 0; start < idFragments.length && !fields.containerId.value; start++) {
+        for (let length = 2; length <= 3 && start + length <= idFragments.length; length++) {
+          const candidate = idFragments.slice(start, start + length).map((line) => line.fragment).join('');
+          const recovered = candidate.match(/[A-Z]{3}[UJZ]\d{7}/)?.[0];
+          if (recovered && this.validateContainerId(recovered)) {
+            fields.containerId = {
+              value: recovered,
+              confidence: Math.min(...idFragments.slice(start, start + length).map((line) => line.mean)),
+            };
+            break;
+          }
+        }
+      }
     }
     const isoLine = find(/\b[0-9]{2}[A-Z][0-9A-Z]\b/);
     if (isoLine) {
