@@ -2,7 +2,7 @@
 
 ## Current status
 
-The Angular 22 PWA shell is implemented. It supports camera capture, device image selection, full-photo and guided-crop modes, editable structured fields, ISO 6346 check-digit validation, local JSON export, and accessible technical diagnostics. The user interface does not upload images.
+The Angular 22 PWA shell is implemented. It supports camera capture, device image selection, full-photo and guided-crop modes, a manual rectangle crop with preview and saved normalized coordinates, editable structured fields, ISO 6346 check-digit validation, local JSON export, and accessible technical diagnostics. The user interface does not upload images.
 
 `npm run build` and `npm test -- --watch=false` passed on 2026-07-28. The two public PaddleOCR source archives were also downloaded to `models/source/`.
 
@@ -37,10 +37,9 @@ The image picker accepts `image/*`, so it supports formats the user's browser ca
 
 ## Improvements backlog
 
-1. High priority: add a manual rectangle crop editor with a preview, OCR of the selected region, and saved crop coordinates. This is the reliable fallback for difficult or oblique marking panels.
-2. Add a four-corner crop editor and text-region overlays.
-3. Complete and test PaddleOCR ONNX preprocessing and postprocessing with real container images.
-4. Add tiled/multi-scale detection and controlled contrast, glare, and denoise variants.
-5. Add curved-text unwarping after measuring failure cases on representative container photos.
-6. Add a sample-image evaluation set and field-level accuracy benchmark.
-7. Add model-version switching and offline cache status management.
+1. Add a four-corner crop editor and text-region overlays.
+2. Complete and test PaddleOCR ONNX preprocessing and postprocessing with real container images.
+3. Add tiled/multi-scale detection and controlled contrast, glare, and denoise variants.
+4. Add curved-text unwarping after measuring failure cases on representative container photos.
+5. Add a sample-image evaluation set and field-level accuracy benchmark.
+6. Add model-version switching and offline cache status management.
