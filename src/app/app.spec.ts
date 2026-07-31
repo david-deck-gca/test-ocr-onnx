@@ -19,6 +19,7 @@ describe('App', () => {
     await fixture.whenStable();
     const compiled = fixture.nativeElement as HTMLElement;
     expect(compiled.querySelector('#capture-title')?.textContent).toContain('Container side photo');
+    expect(compiled.querySelector('input[type="file"]')?.getAttribute('capture')).toBeNull();
   });
 
   it('should render empty field values by default', () => {
