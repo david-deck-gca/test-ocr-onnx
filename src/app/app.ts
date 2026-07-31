@@ -366,7 +366,10 @@ export class App {
   private async createOcrPasses(image: Blob, imageUrl: string): Promise<Array<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }>> {
     const manualCrop = this.cropRect();
     if (manualCrop) {
-      return [await this.createCropPass(image, manualCrop, 2)];
+      return [
+        await this.createCropPass(image, manualCrop, 1),
+        await this.createCropPass(image, manualCrop, 2),
+      ];
     }
     if (this.processingMode() === 'full-photo') {
       return [{ url: imageUrl, offsetX: 0, offsetY: 0, scale: 1, revokeUrl: false }];
@@ -381,7 +384,7 @@ export class App {
         { x: 0, y: 0.5 - overlap, width: 0.5 + overlap, height: 0.5 + overlap },
         { x: 0.5 - overlap, y: 0.5 - overlap, width: 0.5 + overlap, height: 0.5 + overlap },
       ];
-      return await Promise.all(passes.map(async (pass) => {
+      const enhancedPasses = await Promise.all(passes.map(async (pass) => {
         const sourceX = Math.round(pass.x * bitmap.width);
         const sourceY = Math.round(pass.y * bitmap.height);
         const sourceWidth = Math.min(bitmap.width - sourceX, Math.round(pass.width * bitmap.width));
@@ -402,6 +405,8 @@ export class App {
         }, 'image/png'));
         return { url: URL.createObjectURL(crop), offsetX: sourceX, offsetY: sourceY, scale, revokeUrl: true };
       }));
+      // Keep the native photo because rasterized crops can lose a small ISO check digit.
+      return [{ url: imageUrl, offsetX: 0, offsetY: 0, scale: 1, revokeUrl: false }, ...enhancedPasses];
     } finally {
       bitmap.close();
     }
