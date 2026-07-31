@@ -1,7 +1,7 @@
 :host { color: #eaf0eb; display: block; min-height: 100dvh; }
 main { max-width: 1180px; margin: 0 auto; padding: 0 24px 48px; }
 .topbar { align-items: center; border-bottom: 1px solid #33423a; display: flex; justify-content: space-between; min-height: 72px; }
-.brand { align-items: center; display: flex; font: 700 1rem/1.1 Arial, sans-serif; gap: 11px; letter-spacing: .03em; }.brand img { border-radius: 4px; height: 34px; width: 48px; }
+.brand { align-items: center; display: flex; font: 700 1rem/1.1 Arial, sans-serif; gap: 11px; letter-spacing: .03em; }.brand img { border-radius: 4px; height: 34px; object-fit: cover; width: 34px; }
 .offline-badge, .eyebrow { color: #95c6a0; font: 700 .7rem/1 Arial, sans-serif; letter-spacing: .13em; }.offline-badge { border: 1px solid #5b8d68; border-radius: 999px; padding: 7px 10px; }
 .intro { max-width: 780px; padding: 76px 0 45px; }.intro h1 { color: #f4f1e6; font: 700 clamp(2.5rem, 6vw, 5.2rem)/.94 Georgia, serif; letter-spacing: -.055em; margin: 13px 0 18px; }.intro > p:last-child { color: #b7c5ba; font-size: 1.08rem; line-height: 1.6; max-width: 630px; }
 .workspace { display: grid; gap: 20px; grid-template-columns: 1.45fr .9fr; }.capture-panel, .workflow-panel, .results { background: #16231c; border: 1px solid #32443a; border-radius: 14px; padding: 25px; }.panel-heading { align-items: start; display: flex; justify-content: space-between; gap: 16px; }.panel-heading h2 { color: #f4f1e6; font: 700 1.5rem/1 Georgia, serif; margin: 8px 0 22px; }.result-actions { display: flex; flex-wrap: wrap; gap: 10px; }.text-button { background: none; border: 0; color: #a8d4b0; cursor: pointer; font-weight: 700; padding: 2px; }
