@@ -31,6 +31,50 @@ describe('App', () => {
     expect(inputs.every((input) => input.value === '' && input.placeholder === '')).toBe(true);
   });
 
+  it('should default to an editable full-image crop and quick processing', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      cropDraft: () => { x: number; y: number; width: number; height: number };
+      processingMode: () => string;
+    };
+
+    expect(app.cropDraft()).toEqual({ x: 0, y: 0, width: 1, height: 1 });
+    expect(app.processingMode()).toBe('full-photo');
+  });
+
+  it('should clear OCR fields when choosing a new image', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      fields: { set(value: Record<string, { value: string }>): void; (): Record<string, { value: string }> };
+      rawText: { set(value: string[]): void; (): string[] };
+      openFilePicker(): void;
+    };
+    app.fields.set({ containerId: { value: 'HCSU7997909' } });
+    app.rawText.set(['HCSU 799790 9 (98%)']);
+
+    app.openFilePicker();
+
+    expect(app.fields()['containerId'].value).toBe('');
+    expect(app.rawText()).toEqual([]);
+  });
+
+  it('should resize a crop from its bottom-right handle', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      cropDraft: { set(value: { x: number; y: number; width: number; height: number }): void; (): { x: number; y: number; width: number; height: number } };
+      resizeCrop(handle: string, crop: { x: number; y: number; width: number; height: number }, point: { x: number; y: number }): void;
+    };
+    const crop = { x: 0.2, y: 0.3, width: 0.3, height: 0.3 };
+    app.cropDraft.set(crop);
+
+    app.resizeCrop('bottom-right', crop, { x: 0.8, y: 0.9 });
+
+    expect(app.cropDraft().x).toBe(0.2);
+    expect(app.cropDraft().y).toBe(0.3);
+    expect(app.cropDraft().width).toBeCloseTo(0.6);
+    expect(app.cropDraft().height).toBeCloseTo(0.6);
+  });
+
   it('should retain selected manual crop coordinates in exported data', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -247,6 +291,46 @@ describe('App', () => {
 
     expect(fields['containerId'].value).toBe('HCSU7997909');
     expect(fields['containerId'].confidence).toBe(0.88);
+  });
+
+  it('should propose a crop around the container ID and aligned text below it', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      suggestedMarkingBounds(lines: Array<{ text: string; mean: number; box?: number[][] }>, containerId: string): { left: number; top: number; right: number; bottom: number } | null;
+    };
+    const lines = [
+      { text: 'HCSU 799790', mean: 0.92, box: [[400, 100], [560, 100], [560, 125], [400, 125]] },
+      { text: '9', mean: 0.88, box: [[570, 100], [580, 100], [580, 125], [570, 125]] },
+      { text: 'MAX.GR. 30,480 KG', mean: 0.95, box: [[380, 150], [620, 150], [620, 175], [380, 175]] },
+      { text: 'TARE 3,780 KG', mean: 0.95, box: [[380, 185], [580, 185], [580, 210], [380, 210]] },
+    ];
+
+    const bounds = app.suggestedMarkingBounds(lines, 'HCSU7997909');
+
+    expect(bounds).toEqual({ left: 380, top: 100, right: 620, bottom: 210 });
+  });
+
+  it('should replace the full-image draft with an ID-focused crop after initial detection', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      imageSelection: number;
+      cropDraft: () => { x: number; y: number; width: number; height: number };
+      automaticCropSuggested: () => boolean;
+      getOcr(): Promise<{ detect(url: string): Promise<Array<{ text: string; mean: number; box: number[][] }>> }>;
+      createSuggestedCrop(lines: Array<{ text: string; mean: number; box: number[][] }>, containerId: string, image: Blob): Promise<{ x: number; y: number; width: number; height: number } | null>;
+      prepareInitialCrop(image: Blob, imageUrl: string, selection: number): Promise<void>;
+    };
+    const focusedCrop = { x: 0.3, y: 0.2, width: 0.4, height: 0.35 };
+    app.imageSelection = 1;
+    app.getOcr = async () => ({
+      detect: async () => [{ text: 'HCSU 799790 9', mean: 0.95, box: [[300, 100], [500, 100], [500, 130], [300, 130]] }],
+    });
+    app.createSuggestedCrop = async () => focusedCrop;
+
+    await app.prepareInitialCrop(new Blob(), 'blob:test', 1);
+
+    expect(app.cropDraft()).toEqual(focusedCrop);
+    expect(app.automaticCropSuggested()).toBe(true);
   });
 
 });

@@ -24,12 +24,16 @@
       } @else if (previewUrl(); as url) {
         @if (cropEditorOpen()) {
           <section class="crop-editor" aria-labelledby="crop-editor-title">
-            <div><h3 id="crop-editor-title">Select a marking region</h3><p>Drag a rectangle around the container ID or markings you want to read.</p></div>
+            <div><h3 id="crop-editor-title">{{ automaticCropSuggested() ? 'Review suggested marking region' : 'Select a marking region' }}</h3><p>{{ automaticCropSuggested() ? 'OCR located the container ID and text beneath it. Adjust the rectangle if needed before using it.' : 'Drag a rectangle around the container ID or markings you want to read.' }}</p></div>
             <div class="crop-canvas" (pointerdown)="startCrop($event)" (pointermove)="updateCrop($event)" (pointerup)="finishCrop($event)" (pointercancel)="finishCrop($event)">
               <img [src]="url" alt="Container image being cropped" draggable="false" />
-              <div class="crop-selection" [style.left.%]="cropDraft().x * 100" [style.top.%]="cropDraft().y * 100" [style.width.%]="cropDraft().width * 100" [style.height.%]="cropDraft().height * 100"></div>
+              <div class="crop-selection" [style.left.%]="cropDraft().x * 100" [style.top.%]="cropDraft().y * 100" [style.width.%]="cropDraft().width * 100" [style.height.%]="cropDraft().height * 100">
+                @for (handle of cropResizeHandles; track handle) {
+                  <button class="crop-handle {{ handle }}" type="button" [attr.aria-label]="cropResizeHandleLabel(handle)" (pointerdown)="startCropResize($event, handle)"></button>
+                }
+              </div>
             </div>
-            <div class="crop-actions"><button class="secondary" type="button" [disabled]="applyingCrop()" (click)="closeCropEditor()">Cancel</button><button class="primary" type="button" [disabled]="applyingCrop()" (click)="applyCrop()">{{ applyingCrop() ? 'Preparing selected region...' : 'Use selected region' }}</button></div>
+            <div class="crop-actions"><button class="secondary" type="button" [disabled]="applyingCrop() || processing()" (click)="closeCropEditor()">Cancel</button><button class="primary" type="button" [disabled]="applyingCrop() || processing()" (click)="applyCrop()">{{ applyingCrop() ? 'Preparing selected region...' : 'Use selected region' }}</button></div>
           </section>
         } @else {
           <figure class="image-preview"><img [src]="url" alt="Selected container" /><figcaption>{{ sourceName() }}</figcaption></figure>
@@ -38,7 +42,7 @@
         <div class="empty-preview"><span>Container photo</span><p>Use a close, well-lit image of one container side.</p><div><button class="primary" type="button" (click)="openCamera()">Take photo</button><button class="secondary" type="button" (click)="openFilePicker()">Choose image</button></div></div>
       }
       @if (hasImage() && !cameraOpen()) {
-        <div class="source-actions"><button class="secondary" type="button" (click)="openCamera()">Take another photo</button><button class="secondary" type="button" (click)="openFilePicker()">Choose another image</button><button class="secondary" type="button" (click)="openCropEditor()">Crop a region</button></div>
+        <div class="source-actions"><button class="secondary" type="button" (click)="openCamera()">Take another photo</button><button class="secondary" type="button" (click)="openFilePicker()">Choose another image</button></div>
         @if (cropRect() && !cropEditorOpen()) {
           <section class="selected-crop" aria-labelledby="selected-crop-title"><div><p class="eyebrow">MANUAL OCR REGION</p><h3 id="selected-crop-title">Selected crop</h3><p>Only this region will be scanned when you run local OCR.</p></div>@if (cropPreviewUrl(); as cropUrl) { <img [src]="cropUrl" alt="Preview of selected OCR region" /> }<button class="text-button" type="button" (click)="clearCrop()">Remove crop</button></section>
         }
@@ -52,8 +56,8 @@
         <button type="button" [class.selected]="processingMode() === 'guided-crop'" (click)="setMode('guided-crop')" role="radio" [attr.aria-checked]="processingMode() === 'guided-crop'"><strong>Enhanced scan</strong><span>Slower but more accurate</span></button>
       </div>
       <div class="status" [class.busy]="processing()"><span></span><p>{{ status() }}</p></div>
-      <button class="primary run-button" type="button" [disabled]="!hasImage() || processing()" (click)="processImage()">{{ processing() ? 'Processing locally...' : 'Run local OCR' }}</button>
-      <p class="helper">No image data is uploaded. A selected manual crop is scanned at the image's original resolution.</p>
+      <button class="primary run-button" type="button" [disabled]="!hasImage() || processing() || cropEditorOpen()" (click)="processImage()">{{ processing() ? 'Processing locally...' : 'Run local OCR' }}</button>
+      <p class="helper">No image data is uploaded. Crop selection is the default; the selected region is scanned at the image's original resolution.</p>
     </section>
   </section>
 

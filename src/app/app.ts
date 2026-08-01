@@ -7,6 +7,9 @@ type PayloadExportSource = 'detected' | 'calculated';
 type FieldKey = 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'calculatedPayloadKg' | 'calculatedPayloadLb' | 'capacityLiters' | 'capacityCubicMeters' | 'capacityCubicFeet';
 type OcrLine = { text: string; mean: number; box?: number[][] };
 type CropRect = { x: number; y: number; width: number; height: number };
+type BoxBounds = { left: number; top: number; right: number; bottom: number };
+type CropResizeHandle = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+const DEFAULT_CROP: CropRect = { x: 0, y: 0, width: 1, height: 1 };
 
 interface ContainerField {
   value: string;
@@ -35,9 +38,11 @@ export class App {
   protected readonly imageBlob = signal<Blob | null>(null);
   protected readonly cropEditorOpen = signal(false);
   protected readonly cropRect = signal<CropRect | null>(null);
-  protected readonly cropDraft = signal<CropRect>({ x: 0.1, y: 0.1, width: 0.8, height: 0.8 });
+  protected readonly cropDraft = signal<CropRect>(DEFAULT_CROP);
   protected readonly cropPreviewUrl = signal<string | null>(null);
   protected readonly applyingCrop = signal(false);
+  protected readonly automaticCropSuggested = signal(false);
+  protected readonly cropResizeHandles: CropResizeHandle[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
   protected readonly processingMode = signal<ProcessingMode>('full-photo');
   protected readonly cameraOpen = signal(false);
   protected readonly processing = signal(false);
@@ -79,8 +84,11 @@ export class App {
   private stream: MediaStream | null = null;
   private ocr: Awaited<ReturnType<typeof Ocr.create>> | null = null;
   private cropStart: { x: number; y: number } | null = null;
+  private cropResize: { handle: CropResizeHandle; crop: CropRect } | null = null;
+  private imageSelection = 0;
 
   protected openFilePicker(): void {
+    this.clearFields();
     this.fileInput()?.nativeElement.click();
   }
 
@@ -100,12 +108,14 @@ export class App {
   }
 
   protected openCropEditor(): void {
-    this.cropDraft.set(this.cropRect() ?? { x: 0.1, y: 0.1, width: 0.8, height: 0.8 });
+    this.cropDraft.set(this.cropRect() ?? DEFAULT_CROP);
+    this.automaticCropSuggested.set(false);
     this.cropEditorOpen.set(true);
   }
 
   protected closeCropEditor(): void {
     this.cropStart = null;
+    this.cropResize = null;
     this.cropEditorOpen.set(false);
   }
 
@@ -115,23 +125,44 @@ export class App {
     event.preventDefault();
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
     this.cropStart = point;
+    this.cropResize = null;
     this.cropDraft.set({ x: point.x, y: point.y, width: 0, height: 0 });
   }
 
-  protected updateCrop(event: PointerEvent): void {
-    if (!this.cropStart) return;
+  protected startCropResize(event: PointerEvent, handle: CropResizeHandle): void {
     const point = this.cropPoint(event);
     if (!point) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const canvas = (event.currentTarget as HTMLElement).closest('.crop-canvas');
+    if (!canvas) return;
+    canvas.setPointerCapture(event.pointerId);
+    this.cropStart = null;
+    this.cropResize = { handle, crop: this.cropDraft() };
+  }
+
+  protected updateCrop(event: PointerEvent): void {
+    const point = this.cropPoint(event);
+    if (!point) return;
+    if (this.cropResize) {
+      this.resizeCrop(this.cropResize.handle, this.cropResize.crop, point);
+      return;
+    }
+    if (!this.cropStart) return;
     const x = Math.min(this.cropStart.x, point.x);
     const y = Math.min(this.cropStart.y, point.y);
     this.cropDraft.set({ x, y, width: Math.abs(point.x - this.cropStart.x), height: Math.abs(point.y - this.cropStart.y) });
   }
 
   protected finishCrop(event: PointerEvent): void {
-    if (!this.cropStart) return;
+    if (!this.cropStart && !this.cropResize) return;
     this.updateCrop(event);
     this.cropStart = null;
-    (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
+    this.cropResize = null;
+    const canvas = event.currentTarget as HTMLElement;
+    if (canvas.hasPointerCapture(event.pointerId)) {
+      canvas.releasePointerCapture(event.pointerId);
+    }
   }
 
   protected async applyCrop(): Promise<void> {
@@ -145,6 +176,7 @@ export class App {
     try {
       await this.updateCropPreview(crop);
       this.cropRect.set(crop);
+      this.automaticCropSuggested.set(false);
       this.cropEditorOpen.set(false);
       this.status.set('Manual crop ready. Run local OCR to scan only the selected region.');
     } catch (error: unknown) {
@@ -156,6 +188,7 @@ export class App {
 
   protected clearCrop(): void {
     this.cropRect.set(null);
+    this.automaticCropSuggested.set(false);
     const preview = this.cropPreviewUrl();
     if (preview) URL.revokeObjectURL(preview);
     this.cropPreviewUrl.set(null);
@@ -163,6 +196,7 @@ export class App {
   }
 
   protected async openCamera(): Promise<void> {
+    this.clearFields();
     if (!navigator.mediaDevices?.getUserMedia) {
       this.addDiagnostic('Camera', 'This browser does not provide camera access.', 'navigator.mediaDevices.getUserMedia is unavailable.');
       return;
@@ -245,6 +279,7 @@ export class App {
     }
     this.processing.set(true);
     this.diagnostics.set([]);
+    this.automaticCropSuggested.set(false);
     this.status.set('Preparing local OCR models...');
     const imageUrl = this.previewUrl();
     if (!imageUrl) {
@@ -277,7 +312,22 @@ export class App {
       this.payloadExportSource.set(
         fields.calculatedPayloadKg.value || fields.calculatedPayloadLb.value ? 'calculated' : 'detected',
       );
-      this.status.set(`OCR complete. Found ${lines.length} text region${lines.length === 1 ? '' : 's'}. Review the fields before exporting.`);
+      let suggestedCrop: CropRect | null = null;
+      if (!this.cropRect()) {
+        try {
+          suggestedCrop = await this.createSuggestedCrop(lines, fields.containerId.value, image);
+        } catch (error: unknown) {
+          this.addDiagnostic('Crop suggestion', 'OCR results are ready, but a suggested crop could not be prepared.', this.errorMessage(error));
+        }
+      }
+      if (suggestedCrop) {
+        this.cropDraft.set(suggestedCrop);
+        this.automaticCropSuggested.set(true);
+        this.cropEditorOpen.set(true);
+        this.status.set('OCR complete. Review the suggested region around the container ID and markings beneath it.');
+      } else {
+        this.status.set(`OCR complete. Found ${lines.length} text region${lines.length === 1 ? '' : 's'}. Review the fields before exporting.`);
+      }
       this.processing.set(false);
     } catch (error: unknown) {
       this.processing.set(false);
@@ -339,13 +389,63 @@ export class App {
     this.previewUrl.set(URL.createObjectURL(image));
     this.sourceName.set(name);
     this.applyingCrop.set(false);
-    this.cropEditorOpen.set(false);
+    this.automaticCropSuggested.set(false);
+    this.cropEditorOpen.set(true);
     this.cropRect.set(null);
+    this.cropDraft.set(DEFAULT_CROP);
     const cropPreview = this.cropPreviewUrl();
     if (cropPreview) URL.revokeObjectURL(cropPreview);
     this.cropPreviewUrl.set(null);
-    this.status.set('Image ready. Select a processing mode and run OCR.');
     this.rawText.set([]);
+    const selection = ++this.imageSelection;
+    void this.prepareInitialCrop(image, this.previewUrl()!, selection);
+  }
+
+  private clearFields(): void {
+    this.fields.set({
+      containerId: { value: '' },
+      isoCode: { value: '' },
+      mpgmKg: { value: '', unit: 'KG' },
+      mpgmLb: { value: '', unit: 'LB' },
+      tareKg: { value: '', unit: 'KG' },
+      tareLb: { value: '', unit: 'LB' },
+      payloadKg: { value: '', unit: 'KG' },
+      payloadLb: { value: '', unit: 'LB' },
+      calculatedPayloadKg: { value: '', unit: 'KG', calculated: true },
+      calculatedPayloadLb: { value: '', unit: 'LB', calculated: true },
+      capacityLiters: { value: '', unit: 'L' },
+      capacityCubicMeters: { value: '', unit: 'CU.M.' },
+      capacityCubicFeet: { value: '', unit: 'CU.FT.' },
+    });
+    this.rawText.set([]);
+    this.payloadExportSource.set('calculated');
+  }
+
+  private async prepareInitialCrop(image: Blob, imageUrl: string, selection: number): Promise<void> {
+    this.processing.set(true);
+    this.status.set('Locating the container ID and markings in the full photo...');
+    try {
+      const ocr = await this.getOcr();
+      const lines = this.deduplicateLines(await ocr.detect(imageUrl));
+      const containerId = this.extractFields(lines).containerId.value;
+      const suggestedCrop = await this.createSuggestedCrop(lines, containerId, image);
+      if (selection !== this.imageSelection || this.cropRect()) return;
+      if (suggestedCrop) {
+        this.cropDraft.set(suggestedCrop);
+        this.automaticCropSuggested.set(true);
+        this.status.set('Container ID located. Review the suggested crop around it and the markings below.');
+      } else {
+        this.status.set('Container ID was not located. Draw a crop around the ID and markings you want to scan.');
+      }
+    } catch (error: unknown) {
+      if (selection === this.imageSelection) {
+        this.addDiagnostic('Initial crop detection', 'The ID could not be located automatically. Draw a crop around the markings to scan.', this.errorMessage(error));
+      }
+    } finally {
+      if (selection === this.imageSelection) {
+        this.processing.set(false);
+      }
+    }
   }
 
   private async getOcr(): Promise<Awaited<ReturnType<typeof Ocr.create>>> {
@@ -423,7 +523,8 @@ export class App {
   }
 
   private cropPoint(event: PointerEvent): { x: number; y: number } | null {
-    const image = (event.currentTarget as HTMLElement).querySelector('img');
+    const canvas = (event.currentTarget as HTMLElement).closest('.crop-canvas');
+    const image = canvas?.querySelector('img');
     if (!image) return null;
     const bounds = image.getBoundingClientRect();
     if (!bounds.width || !bounds.height) return null;
@@ -433,6 +534,29 @@ export class App {
     };
   }
 
+  private resizeCrop(handle: CropResizeHandle, crop: CropRect, point: { x: number; y: number }): void {
+    const minimumSize = 0.02;
+    let left = crop.x;
+    let top = crop.y;
+    let right = crop.x + crop.width;
+    let bottom = crop.y + crop.height;
+    if (handle === 'top-left' || handle === 'bottom-left') {
+      left = Math.max(0, Math.min(point.x, right - minimumSize));
+    } else {
+      right = Math.min(1, Math.max(point.x, left + minimumSize));
+    }
+    if (handle === 'top-left' || handle === 'top-right') {
+      top = Math.max(0, Math.min(point.y, bottom - minimumSize));
+    } else {
+      bottom = Math.min(1, Math.max(point.y, top + minimumSize));
+    }
+    this.cropDraft.set({ x: left, y: top, width: right - left, height: bottom - top });
+  }
+
+  protected cropResizeHandleLabel(handle: CropResizeHandle): string {
+    return `Resize crop from ${handle.replace('-', ' ')}`;
+  }
+
   private async updateCropPreview(crop: CropRect): Promise<void> {
     const image = this.imageBlob();
     if (!image) return;
@@ -440,6 +564,85 @@ export class App {
     const previous = this.cropPreviewUrl();
     this.cropPreviewUrl.set(pass.url);
     if (previous) URL.revokeObjectURL(previous);
+  }
+
+  private async createSuggestedCrop(lines: OcrLine[], containerId: string, image: Blob): Promise<CropRect | null> {
+    const markingsBounds = this.suggestedMarkingBounds(lines, containerId);
+    if (!markingsBounds) return null;
+
+    const bitmap = await createImageBitmap(image);
+    try {
+      const padding = Math.max(24, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.08);
+      const left = Math.max(0, markingsBounds.left - padding);
+      const top = Math.max(0, markingsBounds.top - padding);
+      const right = Math.min(bitmap.width, markingsBounds.right + padding);
+      const bottom = Math.min(bitmap.height, markingsBounds.bottom + padding);
+      return {
+        x: left / bitmap.width,
+        y: top / bitmap.height,
+        width: (right - left) / bitmap.width,
+        height: (bottom - top) / bitmap.height,
+      };
+    } finally {
+      bitmap.close();
+    }
+  }
+
+  private suggestedMarkingBounds(lines: OcrLine[], containerId: string): BoxBounds | null {
+    if (!containerId) return null;
+    const idLines = this.linesForContainerId(lines, containerId);
+    const idBounds = this.combineBounds(idLines.map((line) => this.boxBounds(line.box)).filter((bounds): bounds is BoxBounds => Boolean(bounds)));
+    if (!idBounds) return null;
+
+    const idWidth = idBounds.right - idBounds.left;
+    const idHeight = idBounds.bottom - idBounds.top;
+    const horizontalAllowance = Math.max(idWidth * 1.5, idHeight * 8);
+    const relevantBounds = lines
+      .map((line) => this.boxBounds(line.box))
+      .filter((bounds): bounds is BoxBounds => Boolean(bounds))
+      .filter((bounds) => bounds.bottom >= idBounds.top - idHeight
+        && bounds.right >= idBounds.left - horizontalAllowance
+        && bounds.left <= idBounds.right + horizontalAllowance);
+    return this.combineBounds([idBounds, ...relevantBounds]);
+  }
+
+  private linesForContainerId(lines: OcrLine[], containerId: string): OcrLine[] {
+    const normalizedId = containerId.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    const fragments = lines
+      .map((line, index) => ({
+        line,
+        index,
+        text: line.text.replace(/[^A-Z0-9]/gi, '').toUpperCase(),
+        bounds: this.boxBounds(line.box),
+      }))
+      .filter((fragment) => fragment.text && fragment.bounds)
+      .sort((first, second) => first.bounds!.top - second.bounds!.top || first.bounds!.left - second.bounds!.left);
+    for (let start = 0; start < fragments.length; start++) {
+      for (let length = 1; length <= 3 && start + length <= fragments.length; length++) {
+        const candidate = fragments.slice(start, start + length);
+        if (candidate.map((fragment) => fragment.text).join('').includes(normalizedId)) {
+          return candidate.map((fragment) => fragment.line);
+        }
+      }
+    }
+    return [];
+  }
+
+  private boxBounds(box: number[][] | undefined): BoxBounds | null {
+    if (!box?.length) return null;
+    const xs = box.map(([x]) => x);
+    const ys = box.map(([, y]) => y);
+    return { left: Math.min(...xs), top: Math.min(...ys), right: Math.max(...xs), bottom: Math.max(...ys) };
+  }
+
+  private combineBounds(bounds: BoxBounds[]): BoxBounds | null {
+    if (!bounds.length) return null;
+    return {
+      left: Math.min(...bounds.map((bound) => bound.left)),
+      top: Math.min(...bounds.map((bound) => bound.top)),
+      right: Math.max(...bounds.map((bound) => bound.right)),
+      bottom: Math.max(...bounds.map((bound) => bound.bottom)),
+    };
   }
 
   private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumWidth?: number): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }> {
