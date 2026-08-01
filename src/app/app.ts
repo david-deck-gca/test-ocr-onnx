@@ -1,4 +1,4 @@
-import { Component, ElementRef, computed, signal, viewChild } from '@angular/core';
+import { Component, ElementRef, Injector, afterNextRender, computed, inject, signal, viewChild } from '@angular/core';
 import Ocr from '@gutenye/ocr-browser';
 import * as ort from 'onnxruntime-web';
 
@@ -82,6 +82,7 @@ export class App {
   ));
 
   private stream: MediaStream | null = null;
+  private readonly injector = inject(Injector);
   private ocr: Awaited<ReturnType<typeof Ocr.create>> | null = null;
   private cropStart: { x: number; y: number } | null = null;
   private cropResize: { handle: CropResizeHandle; crop: CropRect } | null = null;
@@ -202,18 +203,19 @@ export class App {
       return;
     }
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
+      const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
         audio: false,
       });
+      this.stream = stream;
       this.cameraOpen.set(true);
-      queueMicrotask(() => {
+      afterNextRender(() => {
         const video = this.videoPreview()?.nativeElement;
-        if (video && this.stream) {
-          video.srcObject = this.stream;
+        if (video && this.stream === stream) {
+          video.srcObject = stream;
           void video.play();
         }
-      });
+      }, { injector: this.injector });
     } catch (error: unknown) {
       this.addDiagnostic('Camera', 'Camera access was not available. Check browser permission and try again.', this.errorMessage(error));
     }

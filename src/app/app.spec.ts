@@ -58,6 +58,34 @@ describe('App', () => {
     expect(app.rawText()).toEqual([]);
   });
 
+  it('should attach the camera stream after the video preview is rendered', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as { openCamera(): Promise<void> };
+    const stream = { getTracks: () => [] } as unknown as MediaStream;
+    const mediaDevices = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue(stream) } as unknown as MediaDevices,
+    });
+
+    try {
+      await app.openCamera();
+      fixture.detectChanges();
+      await fixture.whenStable();
+
+      expect((fixture.nativeElement as HTMLElement).querySelector<HTMLVideoElement>('video')?.srcObject).toBe(stream);
+      expect(play).toHaveBeenCalled();
+    } finally {
+      play.mockRestore();
+      if (mediaDevices) {
+        Object.defineProperty(navigator, 'mediaDevices', mediaDevices);
+      } else {
+        delete (navigator as { mediaDevices?: MediaDevices }).mediaDevices;
+      }
+    }
+  });
+
   it('should resize a crop from its bottom-right handle', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
