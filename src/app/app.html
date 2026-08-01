@@ -27,7 +27,11 @@
             <div><h3 id="crop-editor-title">{{ automaticCropSuggested() ? 'Review suggested marking region' : 'Select a marking region' }}</h3><p>{{ automaticCropSuggested() ? 'OCR located the container ID and text beneath it. Adjust the rectangle if needed before using it.' : 'Drag a rectangle around the container ID or markings you want to read.' }}</p></div>
             <div class="crop-canvas" (pointerdown)="startCrop($event)" (pointermove)="updateCrop($event)" (pointerup)="finishCrop($event)" (pointercancel)="finishCrop($event)">
               <img [src]="url" alt="Container image being cropped" draggable="false" />
-              <div class="crop-selection" [style.left.%]="cropDraft().x * 100" [style.top.%]="cropDraft().y * 100" [style.width.%]="cropDraft().width * 100" [style.height.%]="cropDraft().height * 100"></div>
+              <div class="crop-selection" [style.left.%]="cropDraft().x * 100" [style.top.%]="cropDraft().y * 100" [style.width.%]="cropDraft().width * 100" [style.height.%]="cropDraft().height * 100">
+                @for (handle of cropResizeHandles; track handle) {
+                  <button class="crop-handle {{ handle }}" type="button" [attr.aria-label]="cropResizeHandleLabel(handle)" (pointerdown)="startCropResize($event, handle)"></button>
+                }
+              </div>
             </div>
             <div class="crop-actions"><button class="secondary" type="button" [disabled]="applyingCrop() || processing()" (click)="closeCropEditor()">Cancel</button><button class="primary" type="button" [disabled]="applyingCrop() || processing()" (click)="applyCrop()">{{ applyingCrop() ? 'Preparing selected region...' : 'Use selected region' }}</button></div>
           </section>

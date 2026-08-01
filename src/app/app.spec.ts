@@ -31,7 +31,7 @@ describe('App', () => {
     expect(inputs.every((input) => input.value === '' && input.placeholder === '')).toBe(true);
   });
 
-  it('should default to an editable full-image crop and enhanced processing', () => {
+  it('should default to an editable full-image crop and quick processing', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       cropDraft: () => { x: number; y: number; width: number; height: number };
@@ -39,7 +39,7 @@ describe('App', () => {
     };
 
     expect(app.cropDraft()).toEqual({ x: 0, y: 0, width: 1, height: 1 });
-    expect(app.processingMode()).toBe('guided-crop');
+    expect(app.processingMode()).toBe('full-photo');
   });
 
   it('should clear OCR fields when choosing a new image', () => {
@@ -56,6 +56,23 @@ describe('App', () => {
 
     expect(app.fields()['containerId'].value).toBe('');
     expect(app.rawText()).toEqual([]);
+  });
+
+  it('should resize a crop from its bottom-right handle', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      cropDraft: { set(value: { x: number; y: number; width: number; height: number }): void; (): { x: number; y: number; width: number; height: number } };
+      resizeCrop(handle: string, crop: { x: number; y: number; width: number; height: number }, point: { x: number; y: number }): void;
+    };
+    const crop = { x: 0.2, y: 0.3, width: 0.3, height: 0.3 };
+    app.cropDraft.set(crop);
+
+    app.resizeCrop('bottom-right', crop, { x: 0.8, y: 0.9 });
+
+    expect(app.cropDraft().x).toBe(0.2);
+    expect(app.cropDraft().y).toBe(0.3);
+    expect(app.cropDraft().width).toBeCloseTo(0.6);
+    expect(app.cropDraft().height).toBeCloseTo(0.6);
   });
 
   it('should retain selected manual crop coordinates in exported data', () => {

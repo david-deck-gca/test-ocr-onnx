@@ -8,6 +8,7 @@ type FieldKey = 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'ta
 type OcrLine = { text: string; mean: number; box?: number[][] };
 type CropRect = { x: number; y: number; width: number; height: number };
 type BoxBounds = { left: number; top: number; right: number; bottom: number };
+type CropResizeHandle = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 const DEFAULT_CROP: CropRect = { x: 0, y: 0, width: 1, height: 1 };
 
 interface ContainerField {
@@ -41,7 +42,8 @@ export class App {
   protected readonly cropPreviewUrl = signal<string | null>(null);
   protected readonly applyingCrop = signal(false);
   protected readonly automaticCropSuggested = signal(false);
-  protected readonly processingMode = signal<ProcessingMode>('guided-crop');
+  protected readonly cropResizeHandles: CropResizeHandle[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+  protected readonly processingMode = signal<ProcessingMode>('full-photo');
   protected readonly cameraOpen = signal(false);
   protected readonly processing = signal(false);
   protected readonly status = signal('Choose a container image to begin.');
@@ -82,6 +84,7 @@ export class App {
   private stream: MediaStream | null = null;
   private ocr: Awaited<ReturnType<typeof Ocr.create>> | null = null;
   private cropStart: { x: number; y: number } | null = null;
+  private cropResize: { handle: CropResizeHandle; crop: CropRect } | null = null;
   private imageSelection = 0;
 
   protected openFilePicker(): void {
@@ -112,6 +115,7 @@ export class App {
 
   protected closeCropEditor(): void {
     this.cropStart = null;
+    this.cropResize = null;
     this.cropEditorOpen.set(false);
   }
 
@@ -121,23 +125,44 @@ export class App {
     event.preventDefault();
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
     this.cropStart = point;
+    this.cropResize = null;
     this.cropDraft.set({ x: point.x, y: point.y, width: 0, height: 0 });
   }
 
-  protected updateCrop(event: PointerEvent): void {
-    if (!this.cropStart) return;
+  protected startCropResize(event: PointerEvent, handle: CropResizeHandle): void {
     const point = this.cropPoint(event);
     if (!point) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const canvas = (event.currentTarget as HTMLElement).closest('.crop-canvas');
+    if (!canvas) return;
+    canvas.setPointerCapture(event.pointerId);
+    this.cropStart = null;
+    this.cropResize = { handle, crop: this.cropDraft() };
+  }
+
+  protected updateCrop(event: PointerEvent): void {
+    const point = this.cropPoint(event);
+    if (!point) return;
+    if (this.cropResize) {
+      this.resizeCrop(this.cropResize.handle, this.cropResize.crop, point);
+      return;
+    }
+    if (!this.cropStart) return;
     const x = Math.min(this.cropStart.x, point.x);
     const y = Math.min(this.cropStart.y, point.y);
     this.cropDraft.set({ x, y, width: Math.abs(point.x - this.cropStart.x), height: Math.abs(point.y - this.cropStart.y) });
   }
 
   protected finishCrop(event: PointerEvent): void {
-    if (!this.cropStart) return;
+    if (!this.cropStart && !this.cropResize) return;
     this.updateCrop(event);
     this.cropStart = null;
-    (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
+    this.cropResize = null;
+    const canvas = event.currentTarget as HTMLElement;
+    if (canvas.hasPointerCapture(event.pointerId)) {
+      canvas.releasePointerCapture(event.pointerId);
+    }
   }
 
   protected async applyCrop(): Promise<void> {
@@ -498,7 +523,8 @@ export class App {
   }
 
   private cropPoint(event: PointerEvent): { x: number; y: number } | null {
-    const image = (event.currentTarget as HTMLElement).querySelector('img');
+    const canvas = (event.currentTarget as HTMLElement).closest('.crop-canvas');
+    const image = canvas?.querySelector('img');
     if (!image) return null;
     const bounds = image.getBoundingClientRect();
     if (!bounds.width || !bounds.height) return null;
@@ -506,6 +532,29 @@ export class App {
       x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
       y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height)),
     };
+  }
+
+  private resizeCrop(handle: CropResizeHandle, crop: CropRect, point: { x: number; y: number }): void {
+    const minimumSize = 0.02;
+    let left = crop.x;
+    let top = crop.y;
+    let right = crop.x + crop.width;
+    let bottom = crop.y + crop.height;
+    if (handle === 'top-left' || handle === 'bottom-left') {
+      left = Math.max(0, Math.min(point.x, right - minimumSize));
+    } else {
+      right = Math.min(1, Math.max(point.x, left + minimumSize));
+    }
+    if (handle === 'top-left' || handle === 'top-right') {
+      top = Math.max(0, Math.min(point.y, bottom - minimumSize));
+    } else {
+      bottom = Math.min(1, Math.max(point.y, top + minimumSize));
+    }
+    this.cropDraft.set({ x: left, y: top, width: right - left, height: bottom - top });
+  }
+
+  protected cropResizeHandleLabel(handle: CropResizeHandle): string {
+    return `Resize crop from ${handle.replace('-', ' ')}`;
   }
 
   private async updateCropPreview(crop: CropRect): Promise<void> {
