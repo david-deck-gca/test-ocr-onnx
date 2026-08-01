@@ -31,6 +31,17 @@ describe('App', () => {
     expect(inputs.every((input) => input.value === '' && input.placeholder === '')).toBe(true);
   });
 
+  it('should default to an editable full-image crop and enhanced processing', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      cropDraft: () => { x: number; y: number; width: number; height: number };
+      processingMode: () => string;
+    };
+
+    expect(app.cropDraft()).toEqual({ x: 0, y: 0, width: 1, height: 1 });
+    expect(app.processingMode()).toBe('guided-crop');
+  });
+
   it('should retain selected manual crop coordinates in exported data', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -247,6 +258,46 @@ describe('App', () => {
 
     expect(fields['containerId'].value).toBe('HCSU7997909');
     expect(fields['containerId'].confidence).toBe(0.88);
+  });
+
+  it('should propose a crop around the container ID and aligned text below it', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      suggestedMarkingBounds(lines: Array<{ text: string; mean: number; box?: number[][] }>, containerId: string): { left: number; top: number; right: number; bottom: number } | null;
+    };
+    const lines = [
+      { text: 'HCSU 799790', mean: 0.92, box: [[400, 100], [560, 100], [560, 125], [400, 125]] },
+      { text: '9', mean: 0.88, box: [[570, 100], [580, 100], [580, 125], [570, 125]] },
+      { text: 'MAX.GR. 30,480 KG', mean: 0.95, box: [[380, 150], [620, 150], [620, 175], [380, 175]] },
+      { text: 'TARE 3,780 KG', mean: 0.95, box: [[380, 185], [580, 185], [580, 210], [380, 210]] },
+    ];
+
+    const bounds = app.suggestedMarkingBounds(lines, 'HCSU7997909');
+
+    expect(bounds).toEqual({ left: 380, top: 100, right: 620, bottom: 210 });
+  });
+
+  it('should replace the full-image draft with an ID-focused crop after initial detection', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      imageSelection: number;
+      cropDraft: () => { x: number; y: number; width: number; height: number };
+      automaticCropSuggested: () => boolean;
+      getOcr(): Promise<{ detect(url: string): Promise<Array<{ text: string; mean: number; box: number[][] }>> }>;
+      createSuggestedCrop(lines: Array<{ text: string; mean: number; box: number[][] }>, containerId: string, image: Blob): Promise<{ x: number; y: number; width: number; height: number } | null>;
+      prepareInitialCrop(image: Blob, imageUrl: string, selection: number): Promise<void>;
+    };
+    const focusedCrop = { x: 0.3, y: 0.2, width: 0.4, height: 0.35 };
+    app.imageSelection = 1;
+    app.getOcr = async () => ({
+      detect: async () => [{ text: 'HCSU 799790 9', mean: 0.95, box: [[300, 100], [500, 100], [500, 130], [300, 130]] }],
+    });
+    app.createSuggestedCrop = async () => focusedCrop;
+
+    await app.prepareInitialCrop(new Blob(), 'blob:test', 1);
+
+    expect(app.cropDraft()).toEqual(focusedCrop);
+    expect(app.automaticCropSuggested()).toBe(true);
   });
 
 });
