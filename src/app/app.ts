@@ -37,6 +37,7 @@ export class App {
   protected readonly cropRect = signal<CropRect | null>(null);
   protected readonly cropDraft = signal<CropRect>({ x: 0.1, y: 0.1, width: 0.8, height: 0.8 });
   protected readonly cropPreviewUrl = signal<string | null>(null);
+  protected readonly applyingCrop = signal(false);
   protected readonly processingMode = signal<ProcessingMode>('full-photo');
   protected readonly cameraOpen = signal(false);
   protected readonly processing = signal(false);
@@ -139,10 +140,18 @@ export class App {
       this.addDiagnostic('Manual crop', 'Draw a larger rectangle around the marking to scan.');
       return;
     }
-    this.cropRect.set(crop);
-    this.cropEditorOpen.set(false);
-    await this.updateCropPreview(crop);
-    this.status.set('Manual crop ready. Run local OCR to scan only the selected region.');
+    this.applyingCrop.set(true);
+    this.status.set('Preparing the selected crop...');
+    try {
+      await this.updateCropPreview(crop);
+      this.cropRect.set(crop);
+      this.cropEditorOpen.set(false);
+      this.status.set('Manual crop ready. Run local OCR to scan only the selected region.');
+    } catch (error: unknown) {
+      this.addDiagnostic('Manual crop', 'The selected region could not be prepared. Adjust the rectangle or choose the image again.', this.errorMessage(error));
+    } finally {
+      this.applyingCrop.set(false);
+    }
   }
 
   protected clearCrop(): void {
@@ -329,6 +338,7 @@ export class App {
     this.imageBlob.set(image);
     this.previewUrl.set(URL.createObjectURL(image));
     this.sourceName.set(name);
+    this.applyingCrop.set(false);
     this.cropEditorOpen.set(false);
     this.cropRect.set(null);
     const cropPreview = this.cropPreviewUrl();

@@ -29,7 +29,7 @@
               <img [src]="url" alt="Container image being cropped" draggable="false" />
               <div class="crop-selection" [style.left.%]="cropDraft().x * 100" [style.top.%]="cropDraft().y * 100" [style.width.%]="cropDraft().width * 100" [style.height.%]="cropDraft().height * 100"></div>
             </div>
-            <div class="crop-actions"><button class="secondary" type="button" (click)="closeCropEditor()">Cancel</button><button class="primary" type="button" (click)="applyCrop()">Use selected region</button></div>
+            <div class="crop-actions"><button class="secondary" type="button" [disabled]="applyingCrop()" (click)="closeCropEditor()">Cancel</button><button class="primary" type="button" [disabled]="applyingCrop()" (click)="applyCrop()">{{ applyingCrop() ? 'Preparing selected region...' : 'Use selected region' }}</button></div>
           </section>
         } @else {
           <figure class="image-preview"><img [src]="url" alt="Selected container" /><figcaption>{{ sourceName() }}</figcaption></figure>

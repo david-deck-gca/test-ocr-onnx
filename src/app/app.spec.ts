@@ -44,6 +44,24 @@ describe('App', () => {
     expect(app.createJsonPayload().source.manualCrop).toEqual(crop);
   });
 
+  it('should keep the crop unselected when preview creation fails', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      cropDraft: { set(value: { x: number; y: number; width: number; height: number }): void };
+      cropRect: () => { x: number; y: number; width: number; height: number } | null;
+      diagnostics: () => Array<{ stage: string; message: string }>;
+      updateCropPreview(crop: { x: number; y: number; width: number; height: number }): Promise<void>;
+      applyCrop(): Promise<void>;
+    };
+    app.cropDraft.set({ x: 0.2, y: 0.2, width: 0.3, height: 0.3 });
+    app.updateCropPreview = () => Promise.reject(new Error('Canvas unavailable'));
+
+    await app.applyCrop();
+
+    expect(app.cropRect()).toBeNull();
+    expect(app.diagnostics().some((diagnostic) => diagnostic.stage === 'Manual crop' && diagnostic.message === 'The selected region could not be prepared. Adjust the rectangle or choose the image again.')).toBe(true);
+  });
+
   it('should extract tank container weights without inventing a payload', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
