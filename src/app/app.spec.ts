@@ -42,6 +42,22 @@ describe('App', () => {
     expect(app.processingMode()).toBe('guided-crop');
   });
 
+  it('should clear OCR fields when choosing a new image', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      fields: { set(value: Record<string, { value: string }>): void; (): Record<string, { value: string }> };
+      rawText: { set(value: string[]): void; (): string[] };
+      openFilePicker(): void;
+    };
+    app.fields.set({ containerId: { value: 'HCSU7997909' } });
+    app.rawText.set(['HCSU 799790 9 (98%)']);
+
+    app.openFilePicker();
+
+    expect(app.fields()['containerId'].value).toBe('');
+    expect(app.rawText()).toEqual([]);
+  });
+
   it('should retain selected manual crop coordinates in exported data', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {

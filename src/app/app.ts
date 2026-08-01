@@ -85,6 +85,7 @@ export class App {
   private imageSelection = 0;
 
   protected openFilePicker(): void {
+    this.clearFields();
     this.fileInput()?.nativeElement.click();
   }
 
@@ -170,6 +171,7 @@ export class App {
   }
 
   protected async openCamera(): Promise<void> {
+    this.clearFields();
     if (!navigator.mediaDevices?.getUserMedia) {
       this.addDiagnostic('Camera', 'This browser does not provide camera access.', 'navigator.mediaDevices.getUserMedia is unavailable.');
       return;
@@ -372,6 +374,26 @@ export class App {
     this.rawText.set([]);
     const selection = ++this.imageSelection;
     void this.prepareInitialCrop(image, this.previewUrl()!, selection);
+  }
+
+  private clearFields(): void {
+    this.fields.set({
+      containerId: { value: '' },
+      isoCode: { value: '' },
+      mpgmKg: { value: '', unit: 'KG' },
+      mpgmLb: { value: '', unit: 'LB' },
+      tareKg: { value: '', unit: 'KG' },
+      tareLb: { value: '', unit: 'LB' },
+      payloadKg: { value: '', unit: 'KG' },
+      payloadLb: { value: '', unit: 'LB' },
+      calculatedPayloadKg: { value: '', unit: 'KG', calculated: true },
+      calculatedPayloadLb: { value: '', unit: 'LB', calculated: true },
+      capacityLiters: { value: '', unit: 'L' },
+      capacityCubicMeters: { value: '', unit: 'CU.M.' },
+      capacityCubicFeet: { value: '', unit: 'CU.FT.' },
+    });
+    this.rawText.set([]);
+    this.payloadExportSource.set('calculated');
   }
 
   private async prepareInitialCrop(image: Blob, imageUrl: string, selection: number): Promise<void> {
