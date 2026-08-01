@@ -116,7 +116,7 @@ describe('App', () => {
     expect(app.createJsonPayload().source.manualCrop).toEqual(crop);
   });
 
-  it('should keep the crop unselected when preview creation fails', async () => {
+  it('should retain the selected crop when preview creation fails', async () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       cropDraft: { set(value: { x: number; y: number; width: number; height: number }): void };
@@ -130,8 +130,28 @@ describe('App', () => {
 
     await app.applyCrop();
 
-    expect(app.cropRect()).toBeNull();
-    expect(app.diagnostics().some((diagnostic) => diagnostic.stage === 'Manual crop' && diagnostic.message === 'The selected region could not be prepared. Adjust the rectangle or choose the image again.')).toBe(true);
+    expect(app.cropRect()).toEqual({ x: 0.2, y: 0.2, width: 0.3, height: 0.3 });
+    expect(app.diagnostics().some((diagnostic) => diagnostic.stage === 'Crop preview' && diagnostic.message === 'The selected region was saved, but its preview could not be generated.')).toBe(true);
+  });
+
+  it('should scan the native crop when enhanced crop preparation fails', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      cropRect: { set(value: { x: number; y: number; width: number; height: number }): void };
+      diagnostics: () => Array<{ stage: string; message: string }>;
+      createCropPass(image: Blob, crop: { x: number; y: number; width: number; height: number }, scale: number): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }>;
+      createOcrPasses(image: Blob, imageUrl: string): Promise<Array<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }>>;
+    };
+    app.cropRect.set({ x: 0.2, y: 0.2, width: 0.3, height: 0.3 });
+    app.createCropPass = async (_image, _crop, scale) => {
+      if (scale === 2) throw new Error('Canvas size limit');
+      return { url: 'blob:native-crop', offsetX: 100, offsetY: 100, scale: 1, revokeUrl: true };
+    };
+
+    const passes = await app.createOcrPasses(new Blob(), 'blob:full-photo');
+
+    expect(passes).toEqual([{ url: 'blob:native-crop', offsetX: 100, offsetY: 100, scale: 1, revokeUrl: true }]);
+    expect(app.diagnostics().some((diagnostic) => diagnostic.stage === 'Enhanced crop')).toBe(true);
   });
 
   it('should extract tank container weights without inventing a payload', () => {
@@ -321,7 +341,7 @@ describe('App', () => {
     expect(fields['containerId'].confidence).toBe(0.88);
   });
 
-  it('should propose a crop around the container ID and aligned text below it', () => {
+  it('should keep the suggested crop inside the ID front-panel column', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       suggestedMarkingBounds(lines: Array<{ text: string; mean: number; box?: number[][] }>, containerId: string): { left: number; top: number; right: number; bottom: number } | null;
@@ -331,11 +351,12 @@ describe('App', () => {
       { text: '9', mean: 0.88, box: [[570, 100], [580, 100], [580, 125], [570, 125]] },
       { text: 'MAX.GR. 30,480 KG', mean: 0.95, box: [[380, 150], [620, 150], [620, 175], [380, 175]] },
       { text: 'TARE 3,780 KG', mean: 0.95, box: [[380, 185], [580, 185], [580, 210], [380, 210]] },
+      { text: 'HIGH VOLTAGE', mean: 0.95, box: [[560, 170], [900, 170], [900, 195], [560, 195]] },
     ];
 
     const bounds = app.suggestedMarkingBounds(lines, 'HCSU7997909');
 
-    expect(bounds).toEqual({ left: 380, top: 100, right: 620, bottom: 210 });
+    expect(bounds).toEqual({ left: 380, top: 100, right: 630, bottom: 210 });
   });
 
   it('should replace the full-image draft with an ID-focused crop after initial detection', async () => {
