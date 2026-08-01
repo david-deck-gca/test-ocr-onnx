@@ -81,6 +81,8 @@ export class App {
   private cropStart: { x: number; y: number } | null = null;
 
   protected openFilePicker(): void {
+    this.clearOcrResults();
+    this.status.set('Choose an image file to scan.');
     this.fileInput()?.nativeElement.click();
   }
 
@@ -163,6 +165,8 @@ export class App {
   }
 
   protected async openCamera(): Promise<void> {
+    this.clearOcrResults();
+    this.status.set('Opening the camera...');
     if (!navigator.mediaDevices?.getUserMedia) {
       this.addDiagnostic('Camera', 'This browser does not provide camera access.', 'navigator.mediaDevices.getUserMedia is unavailable.');
       return;
@@ -345,7 +349,28 @@ export class App {
     if (cropPreview) URL.revokeObjectURL(cropPreview);
     this.cropPreviewUrl.set(null);
     this.status.set('Image ready. Select a processing mode and run OCR.');
+    this.clearOcrResults();
+  }
+
+  private clearOcrResults(): void {
+    this.diagnostics.set([]);
     this.rawText.set([]);
+    this.fields.set({
+      containerId: { value: '' },
+      isoCode: { value: '' },
+      mpgmKg: { value: '', unit: 'KG' },
+      mpgmLb: { value: '', unit: 'LB' },
+      tareKg: { value: '', unit: 'KG' },
+      tareLb: { value: '', unit: 'LB' },
+      payloadKg: { value: '', unit: 'KG' },
+      payloadLb: { value: '', unit: 'LB' },
+      calculatedPayloadKg: { value: '', unit: 'KG', calculated: true },
+      calculatedPayloadLb: { value: '', unit: 'LB', calculated: true },
+      capacityLiters: { value: '', unit: 'L' },
+      capacityCubicMeters: { value: '', unit: 'CU.M.' },
+      capacityCubicFeet: { value: '', unit: 'CU.FT.' },
+    });
+    this.payloadExportSource.set('calculated');
   }
 
   private async getOcr(): Promise<Awaited<ReturnType<typeof Ocr.create>>> {
