@@ -37,9 +37,8 @@
         <div class="source-actions"><button class="secondary" type="button" (click)="openCamera()">Take another photo</button><button class="secondary" type="button" (click)="openFilePicker()">Choose another image</button></div>
       }
     </section>
-  </section>
-
-  <section class="results" aria-labelledby="results-title">
+  
+    <section class="results" aria-labelledby="results-title">
     <div class="panel-heading"><div class="rescan-guidance"><p class="crop-guidance">If the result is not accurate, narrow the selected region around the markings and scan it again.</p><button class="primary" type="button" [disabled]="!hasImage() || processing()" (click)="applyCrop()">{{ processing() ? 'Processing locally...' : 'Re-run scan with selected region' }}</button></div><div class="result-actions"><button class="secondary" type="button" [disabled]="!hasImage()" (click)="saveJsonToIndexedDb()">Save</button><button class="primary" type="button" [disabled]="!hasImage()" (click)="exportJson()">Export JSON (debug)</button></div></div>
     <div class="field-grid">
       <label class="wide">Container ID<input [value]="fields().containerId.value" (input)="updateField('containerId', $any($event.target).value)" autocapitalize="characters" />@if (fields().containerId.value) { <small [class.valid]="containerIdValid()" [class.invalid]="!containerIdValid()">{{ containerIdValid() ? 'ISO 6346 check digit valid' : 'Check the ID or check digit' }}</small> }</label>
@@ -66,5 +65,6 @@
       </div>
     </div>
     <div class="raw-text"><h3>Raw detected text</h3>@if (rawText().length) { <ul>@for (line of rawText(); track line) { <li>{{ line }}</li> }</ul> } @else { <p>Detected lines will be retained here with the exported record.</p> }</div>
+    </section>
   </section>
 </main>
