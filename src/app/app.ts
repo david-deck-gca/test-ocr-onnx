@@ -287,16 +287,6 @@ export class App {
     }
   }
 
-  protected exportJson(): void {
-    const payload = this.createJsonPayload();
-    const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${this.sourceName().replace(/\.[^.]+$/, '') || 'container'}-ocr.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-  }
-
   protected async saveJsonToIndexedDb(): Promise<void> {
     try {
       const database = await this.openSavedRecordsDatabase();
