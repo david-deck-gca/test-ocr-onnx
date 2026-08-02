@@ -1,8 +1,4 @@
 <main>
-  <header class="topbar">
-    <div class="brand"><img src="/favicon.png" alt="GCA" /><span>Container Mark Reader</span></div>
-    <span class="offline-badge">Offline-ready</span>
-  </header>
 
   @if (diagnostics().length) {
     <section class="diagnostics" aria-live="assertive" aria-labelledby="diagnostic-title">
@@ -16,7 +12,6 @@
 
   <section class="workspace">
     <section class="capture-panel" aria-labelledby="capture-title">
-      <div class="panel-heading"><div><p class="eyebrow">01 / IMAGE</p><h2 id="capture-title">Container side photo</h2></div></div>
       <input #fileInput type="file" accept="image/*" hidden (change)="selectFile($event)" />
 
       @if (cameraOpen()) {
@@ -50,7 +45,6 @@
     </section>
 
     <section class="workflow-panel" aria-labelledby="workflow-title">
-      <div class="panel-heading"><div><p class="eyebrow">02 / OCR</p><h2 id="workflow-title">Processing approach</h2></div></div>
       <div class="mode-options" role="radiogroup" aria-label="Processing mode">
         <button type="button" [class.selected]="processingMode() === 'full-photo'" (click)="setMode('full-photo')" role="radio" [attr.aria-checked]="processingMode() === 'full-photo'"><strong>Quick scan</strong><span>Faster but less accurate</span></button>
         <button type="button" [class.selected]="processingMode() === 'guided-crop'" (click)="setMode('guided-crop')" role="radio" [attr.aria-checked]="processingMode() === 'guided-crop'"><strong>Enhanced scan</strong><span>Slower but more accurate</span></button>
@@ -62,7 +56,7 @@
   </section>
 
   <section class="results" aria-labelledby="results-title">
-    <div class="panel-heading"><div><p class="eyebrow">03 / REVIEW</p><h2 id="results-title">Structured container data</h2></div><div class="result-actions"><button class="secondary" type="button" [disabled]="!hasImage()" (click)="saveJsonToIndexedDb()">Save</button><button class="primary" type="button" [disabled]="!hasImage()" (click)="exportJson()">Export JSON (debug)</button></div></div>
+    <div class="panel-heading"><div class="result-actions"><button class="secondary" type="button" [disabled]="!hasImage()" (click)="saveJsonToIndexedDb()">Save</button><button class="primary" type="button" [disabled]="!hasImage()" (click)="exportJson()">Export JSON (debug)</button></div></div>
     <div class="field-grid">
       <label class="wide">Container ID<input [value]="fields().containerId.value" (input)="updateField('containerId', $any($event.target).value)" autocapitalize="characters" />@if (fields().containerId.value) { <small [class.valid]="containerIdValid()" [class.invalid]="!containerIdValid()">{{ containerIdValid() ? 'ISO 6346 check digit valid' : 'Check the ID or check digit' }}</small> }</label>
       <label>ISO CODE<input [value]="fields().isoCode.value" (input)="updateField('isoCode', $any($event.target).value)" autocapitalize="characters" /></label>
