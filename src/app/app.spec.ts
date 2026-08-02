@@ -18,7 +18,8 @@ describe('App', () => {
     const fixture = TestBed.createComponent(App);
     await fixture.whenStable();
     const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('#capture-title')?.textContent).toContain('Container side photo');
+    expect(compiled.querySelector('.capture-panel')).not.toBeNull();
+    expect(compiled.querySelector('.empty-preview')?.textContent).toContain('Container photo');
     expect(compiled.querySelector('input[type="file"]')?.getAttribute('capture')).toBeNull();
   });
 
@@ -344,6 +345,8 @@ describe('App', () => {
       imageSelection: number;
       cropDraft: () => { x: number; y: number; width: number; height: number };
       automaticCropSuggested: () => boolean;
+      fields: () => Record<string, { value: string }>;
+      rawText: () => string[];
       getOcr(): Promise<{ detect(url: string): Promise<Array<{ text: string; mean: number; box: number[][] }>> }>;
       createSuggestedCrop(lines: Array<{ text: string; mean: number; box: number[][] }>, containerId: string, image: Blob): Promise<{ x: number; y: number; width: number; height: number } | null>;
       prepareInitialCrop(image: Blob, imageUrl: string, selection: number): Promise<void>;
@@ -359,6 +362,8 @@ describe('App', () => {
 
     expect(app.cropDraft()).toEqual(focusedCrop);
     expect(app.automaticCropSuggested()).toBe(true);
+    expect(app.fields()['containerId'].value).toBe('HCSU7997909');
+    expect(app.rawText()).toEqual(['HCSU 799790 9 (95%)']);
   });
 
 });
