@@ -320,6 +320,18 @@ describe('App', () => {
     expect(fields['containerId'].confidence).toBe(0.88);
   });
 
+  it('should calculate a missing container check digit from a detected ID prefix', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string; confidence?: number }>;
+    };
+
+    const fields = app.extractFields([{ text: 'SDNU 920459', mean: 0.99 }]);
+
+    expect(fields['containerId'].value).toBe('SDNU9204594');
+    expect(fields['containerId'].confidence).toBe(0.99);
+  });
+
   it('should propose a crop around the container ID and aligned text below it', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -335,17 +347,6 @@ describe('App', () => {
     const bounds = app.suggestedMarkingBounds(lines, 'HCSU7997909');
 
     expect(bounds).toEqual({ left: 380, top: 100, right: 620, bottom: 210 });
-  });
-
-  it('should limit OCR input by its longest crop dimension', () => {
-    const fixture = TestBed.createComponent(App);
-    const app = fixture.componentInstance as unknown as {
-      ocrOutputScale(sourceWidth: number, sourceHeight: number, scale: number, maximumDimension?: number): number;
-    };
-
-    expect(app.ocrOutputScale(4000, 3000, 1, 1600)).toBe(0.4);
-    expect(app.ocrOutputScale(900, 4500, 1, 1600)).toBeCloseTo(1600 / 4500);
-    expect(app.ocrOutputScale(1200, 800, 1, 1600)).toBe(1);
   });
 
   it('should replace the full-image draft with an ID-focused crop after initial detection', async () => {

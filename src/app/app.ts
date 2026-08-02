@@ -10,7 +10,6 @@ type BoxBounds = { left: number; top: number; right: number; bottom: number };
 type CropResizeHandle = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 type OcrPass = { url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean; sourceWidth: number; sourceHeight: number };
 const DEFAULT_CROP: CropRect = { x: 0, y: 0, width: 1, height: 1 };
-const MAX_OCR_INPUT_DIMENSION = 1600;
 
 interface ContainerField {
   value: string;
@@ -421,7 +420,7 @@ export class App {
     this.status.set('Locating the container ID and markings in the full photo...');
     try {
       const ocr = await this.getOcr();
-      const pass = await this.createCropPass(image, DEFAULT_CROP, 1, MAX_OCR_INPUT_DIMENSION);
+      const pass = await this.createCropPass(image, DEFAULT_CROP, 1);
       let lines: OcrLine[];
       try {
         lines = this.deduplicateLines((await ocr.detect(pass.url)).map((line) => ({
@@ -485,7 +484,7 @@ export class App {
 
   private async createOcrPasses(image: Blob): Promise<OcrPass[]> {
     const crop = this.cropRect();
-    return [await this.createCropPass(image, crop ?? DEFAULT_CROP, 1, MAX_OCR_INPUT_DIMENSION)];
+    return [await this.createCropPass(image, crop ?? DEFAULT_CROP, 1)];
   }
 
   private cropPoint(event: PointerEvent): { x: number; y: number } | null {
@@ -597,14 +596,14 @@ export class App {
     };
   }
 
-  private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumDimension?: number): Promise<OcrPass> {
+  private async createCropPass(image: Blob, crop: CropRect, scale: number): Promise<OcrPass> {
     const bitmap = await createImageBitmap(image);
     try {
       const sourceX = Math.round(crop.x * bitmap.width);
       const sourceY = Math.round(crop.y * bitmap.height);
       const sourceWidth = Math.max(1, Math.round(crop.width * bitmap.width));
       const sourceHeight = Math.max(1, Math.round(crop.height * bitmap.height));
-      const outputScale = this.ocrOutputScale(sourceWidth, sourceHeight, scale, maximumDimension);
+      const outputScale = scale;
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(sourceWidth * outputScale));
       canvas.height = Math.max(1, Math.round(sourceHeight * outputScale));
@@ -621,10 +620,6 @@ export class App {
     } finally {
       bitmap.close();
     }
-  }
-
-  private ocrOutputScale(sourceWidth: number, sourceHeight: number, scale: number, maximumDimension?: number): number {
-    return maximumDimension ? Math.min(scale, maximumDimension / Math.max(sourceWidth, sourceHeight)) : scale;
   }
 
   private deduplicateLines(lines: OcrLine[]): OcrLine[] {
@@ -728,6 +723,12 @@ export class App {
             break;
           }
         }
+      }
+      const idPrefixLine = find(/[A-Z]{3}[UJZ][\s-]*\d{6}(?!\d)/);
+      const idPrefix = idPrefixLine?.normalized.match(/[A-Z]{3}[UJZ][\s-]*\d{6}(?!\d)/)?.[0];
+      const recoveredId = idPrefix ? this.completeContainerId(idPrefix) : null;
+      if (!fields.containerId.value && recoveredId && idPrefixLine) {
+        fields.containerId = { value: recoveredId, confidence: idPrefixLine.mean };
       }
     }
     const isoLine = find(/\b[0-9]{2}[A-Z][0-9A-Z]\b/);
@@ -923,6 +924,17 @@ export class App {
     if (!/^[A-Z]{3}[UJZ]\d{7}$/.test(normalized)) {
       return false;
     }
+    return normalized[10] === this.containerCheckDigit(normalized.slice(0, 10));
+  }
+
+  private completeContainerId(value: string): string | null {
+    const normalized = value.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    return /^[A-Z]{3}[UJZ]\d{6}$/.test(normalized)
+      ? `${normalized}${this.containerCheckDigit(normalized)}`
+      : null;
+  }
+
+  private containerCheckDigit(prefix: string): string {
     const weights = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512];
     const letterValue = (letter: string) => {
       let value = letter.charCodeAt(0) - 55;
@@ -938,11 +950,10 @@ export class App {
       }
       return value;
     };
-    const sum = normalized.slice(0, 10).split('').reduce((total, character, index) => {
+    const sum = prefix.split('').reduce((total, character, index) => {
       const value = /\d/.test(character) ? Number(character) : letterValue(character);
       return total + value * weights[index];
     }, 0);
-    const checkDigit = (sum % 11) % 10;
-    return checkDigit === Number(normalized[10]);
+    return String((sum % 11) % 10);
   }
 }
