@@ -8,7 +8,9 @@ type OcrLine = { text: string; mean: number; box?: number[][] };
 type CropRect = { x: number; y: number; width: number; height: number };
 type BoxBounds = { left: number; top: number; right: number; bottom: number };
 type CropResizeHandle = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+type OcrPass = { url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean; sourceWidth: number; sourceHeight: number };
 const DEFAULT_CROP: CropRect = { x: 0, y: 0, width: 1, height: 1 };
+const MAX_OCR_INPUT_DIMENSION = 1600;
 
 interface ContainerField {
   value: string;
@@ -248,17 +250,11 @@ export class App {
     this.processing.set(true);
     this.diagnostics.set([]);
     this.status.set('Preparing local OCR models...');
-    const imageUrl = this.previewUrl();
-    if (!imageUrl) {
-      this.processing.set(false);
-      this.addDiagnostic('Image input', 'The selected image preview is unavailable. Choose the image again.');
-      return;
-    }
     try {
       this.status.set('Loading local PaddleOCR models...');
       const ocr = await this.getOcr();
       this.status.set('Detecting painted text in the selected region...');
-      const passes = await this.createOcrPasses(image, imageUrl);
+      const passes = await this.createOcrPasses(image);
       const lines = this.deduplicateLines((await Promise.all(passes.map(async (pass) => {
         try {
           const detected = await ocr.detect(pass.url);
@@ -330,7 +326,7 @@ export class App {
     this.cropDraft.set(DEFAULT_CROP);
     this.rawText.set([]);
     const selection = ++this.imageSelection;
-    void this.prepareInitialCrop(image, this.previewUrl()!, selection);
+    void this.prepareInitialCrop(image, selection);
   }
 
   private clearFields(): void {
@@ -353,12 +349,21 @@ export class App {
     this.payloadExportSource.set('calculated');
   }
 
-  private async prepareInitialCrop(image: Blob, imageUrl: string, selection: number): Promise<void> {
+  private async prepareInitialCrop(image: Blob, selection: number): Promise<void> {
     this.processing.set(true);
     this.status.set('Locating the container ID and markings in the full photo...');
     try {
       const ocr = await this.getOcr();
-      const lines = this.deduplicateLines(await ocr.detect(imageUrl));
+      const pass = await this.createCropPass(image, DEFAULT_CROP, 1, MAX_OCR_INPUT_DIMENSION);
+      let lines: OcrLine[];
+      try {
+        lines = this.deduplicateLines((await ocr.detect(pass.url)).map((line) => ({
+          ...line,
+          box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
+        })));
+      } finally {
+        URL.revokeObjectURL(pass.url);
+      }
       if (selection !== this.imageSelection || this.cropRect()) return;
       const fields = this.extractFields(lines);
       this.rawText.set(lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`));
@@ -367,11 +372,11 @@ export class App {
         fields.calculatedPayloadKg.value || fields.calculatedPayloadLb.value ? 'calculated' : 'detected',
       );
       const containerId = fields.containerId.value;
-      const suggestedCrop = await this.createSuggestedCrop(lines, containerId, image);
+      const suggestedCrop = this.createSuggestedCrop(lines, containerId, pass.sourceWidth, pass.sourceHeight);
       if (selection !== this.imageSelection || this.cropRect()) return;
       if (suggestedCrop) {
         this.cropDraft.set(suggestedCrop);
-      this.status.set('');
+        this.status.set('');
       } else {
         this.status.set('Container ID was not located. Draw a crop around the ID and markings you want to scan.');
       }
@@ -411,9 +416,9 @@ export class App {
     return error instanceof Error ? error.message : String(error);
   }
 
-  private async createOcrPasses(image: Blob, imageUrl: string): Promise<Array<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }>> {
+  private async createOcrPasses(image: Blob): Promise<OcrPass[]> {
     const crop = this.cropRect();
-    return crop ? [await this.createCropPass(image, crop, 1)] : [{ url: imageUrl, offsetX: 0, offsetY: 0, scale: 1, revokeUrl: false }];
+    return [await this.createCropPass(image, crop ?? DEFAULT_CROP, 1, MAX_OCR_INPUT_DIMENSION)];
   }
 
   private cropPoint(event: PointerEvent): { x: number; y: number } | null {
@@ -451,26 +456,21 @@ export class App {
     return `Resize crop from ${handle.replace('-', ' ')}`;
   }
 
-  private async createSuggestedCrop(lines: OcrLine[], containerId: string, image: Blob): Promise<CropRect | null> {
+  private createSuggestedCrop(lines: OcrLine[], containerId: string, imageWidth: number, imageHeight: number): CropRect | null {
     const markingsBounds = this.suggestedMarkingBounds(lines, containerId);
     if (!markingsBounds) return null;
 
-    const bitmap = await createImageBitmap(image);
-    try {
-      const padding = Math.max(24, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.08);
-      const left = Math.max(0, markingsBounds.left - padding);
-      const top = Math.max(0, markingsBounds.top - padding);
-      const right = Math.min(bitmap.width, markingsBounds.right + padding);
-      const bottom = Math.min(bitmap.height, markingsBounds.bottom + padding);
-      return {
-        x: left / bitmap.width,
-        y: top / bitmap.height,
-        width: (right - left) / bitmap.width,
-        height: (bottom - top) / bitmap.height,
-      };
-    } finally {
-      bitmap.close();
-    }
+    const padding = Math.max(24, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.08);
+    const left = Math.max(0, markingsBounds.left - padding);
+    const top = Math.max(0, markingsBounds.top - padding);
+    const right = Math.min(imageWidth, markingsBounds.right + padding);
+    const bottom = Math.min(imageHeight, markingsBounds.bottom + padding);
+    return {
+      x: left / imageWidth,
+      y: top / imageHeight,
+      width: (right - left) / imageWidth,
+      height: (bottom - top) / imageHeight,
+    };
   }
 
   private suggestedMarkingBounds(lines: OcrLine[], containerId: string): BoxBounds | null {
@@ -530,14 +530,14 @@ export class App {
     };
   }
 
-  private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumWidth?: number): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }> {
+  private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumDimension?: number): Promise<OcrPass> {
     const bitmap = await createImageBitmap(image);
     try {
       const sourceX = Math.round(crop.x * bitmap.width);
       const sourceY = Math.round(crop.y * bitmap.height);
       const sourceWidth = Math.max(1, Math.round(crop.width * bitmap.width));
       const sourceHeight = Math.max(1, Math.round(crop.height * bitmap.height));
-      const outputScale = maximumWidth ? Math.min(1, maximumWidth / sourceWidth) : scale;
+      const outputScale = this.ocrOutputScale(sourceWidth, sourceHeight, scale, maximumDimension);
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(sourceWidth * outputScale));
       canvas.height = Math.max(1, Math.round(sourceHeight * outputScale));
@@ -548,10 +548,16 @@ export class App {
         if (result) resolve(result);
         else reject(new Error('Manual crop could not be created.'));
       }, 'image/png'));
-      return { url: URL.createObjectURL(blob), offsetX: sourceX, offsetY: sourceY, scale: outputScale, revokeUrl: true };
+      canvas.width = 0;
+      canvas.height = 0;
+      return { url: URL.createObjectURL(blob), offsetX: sourceX, offsetY: sourceY, scale: outputScale, revokeUrl: true, sourceWidth: bitmap.width, sourceHeight: bitmap.height };
     } finally {
       bitmap.close();
     }
+  }
+
+  private ocrOutputScale(sourceWidth: number, sourceHeight: number, scale: number, maximumDimension?: number): number {
+    return maximumDimension ? Math.min(scale, maximumDimension / Math.max(sourceWidth, sourceHeight)) : scale;
   }
 
   private deduplicateLines(lines: OcrLine[]): OcrLine[] {

@@ -337,6 +337,17 @@ describe('App', () => {
     expect(bounds).toEqual({ left: 380, top: 100, right: 620, bottom: 210 });
   });
 
+  it('should limit OCR input by its longest crop dimension', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      ocrOutputScale(sourceWidth: number, sourceHeight: number, scale: number, maximumDimension?: number): number;
+    };
+
+    expect(app.ocrOutputScale(4000, 3000, 1, 1600)).toBe(0.4);
+    expect(app.ocrOutputScale(900, 4500, 1, 1600)).toBeCloseTo(1600 / 4500);
+    expect(app.ocrOutputScale(1200, 800, 1, 1600)).toBe(1);
+  });
+
   it('should replace the full-image draft with an ID-focused crop after initial detection', async () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -345,17 +356,19 @@ describe('App', () => {
       fields: () => Record<string, { value: string }>;
       rawText: () => string[];
       getOcr(): Promise<{ detect(url: string): Promise<Array<{ text: string; mean: number; box: number[][] }>> }>;
-      createSuggestedCrop(lines: Array<{ text: string; mean: number; box: number[][] }>, containerId: string, image: Blob): Promise<{ x: number; y: number; width: number; height: number } | null>;
-      prepareInitialCrop(image: Blob, imageUrl: string, selection: number): Promise<void>;
+       createSuggestedCrop(lines: Array<{ text: string; mean: number; box: number[][] }>, containerId: string, imageWidth: number, imageHeight: number): { x: number; y: number; width: number; height: number } | null;
+       createCropPass(image: Blob, crop: { x: number; y: number; width: number; height: number }, scale: number, maximumDimension?: number): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean; sourceWidth: number; sourceHeight: number }>;
+       prepareInitialCrop(image: Blob, selection: number): Promise<void>;
     };
     const focusedCrop = { x: 0.3, y: 0.2, width: 0.4, height: 0.35 };
     app.imageSelection = 1;
     app.getOcr = async () => ({
       detect: async () => [{ text: 'HCSU 799790 9', mean: 0.95, box: [[300, 100], [500, 100], [500, 130], [300, 130]] }],
     });
-    app.createSuggestedCrop = async () => focusedCrop;
+    app.createCropPass = async () => ({ url: 'blob:test', offsetX: 0, offsetY: 0, scale: 1, revokeUrl: true, sourceWidth: 1000, sourceHeight: 500 });
+    app.createSuggestedCrop = () => focusedCrop;
 
-    await app.prepareInitialCrop(new Blob(), 'blob:test', 1);
+    await app.prepareInitialCrop(new Blob(), 1);
 
     expect(app.cropDraft()).toEqual(focusedCrop);
     expect(app.fields()['containerId'].value).toBe('HCSU7997909');
