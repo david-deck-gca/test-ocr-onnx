@@ -429,7 +429,14 @@ export class App {
     try {
       const ocr = await this.getOcr();
       const lines = this.deduplicateLines(await ocr.detect(imageUrl));
-      const containerId = this.extractFields(lines).containerId.value;
+      if (selection !== this.imageSelection || this.cropRect()) return;
+      const fields = this.extractFields(lines);
+      this.rawText.set(lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`));
+      this.fields.set(fields);
+      this.payloadExportSource.set(
+        fields.calculatedPayloadKg.value || fields.calculatedPayloadLb.value ? 'calculated' : 'detected',
+      );
+      const containerId = fields.containerId.value;
       const suggestedCrop = await this.createSuggestedCrop(lines, containerId, image);
       if (selection !== this.imageSelection || this.cropRect()) return;
       if (suggestedCrop) {
