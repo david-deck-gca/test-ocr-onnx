@@ -2,7 +2,6 @@ import { Component, ElementRef, Injector, afterNextRender, computed, inject, sig
 import Ocr from '@gutenye/ocr-browser';
 import * as ort from 'onnxruntime-web';
 
-type ProcessingMode = 'full-photo' | 'guided-crop';
 type PayloadExportSource = 'detected' | 'calculated';
 type FieldKey = 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'calculatedPayloadKg' | 'calculatedPayloadLb' | 'capacityLiters' | 'capacityCubicMeters' | 'capacityCubicFeet';
 type OcrLine = { text: string; mean: number; box?: number[][] };
@@ -36,17 +35,12 @@ export class App {
   protected readonly sourceName = signal('');
   protected readonly previewUrl = signal<string | null>(null);
   protected readonly imageBlob = signal<Blob | null>(null);
-  protected readonly cropEditorOpen = signal(false);
   protected readonly cropRect = signal<CropRect | null>(null);
   protected readonly cropDraft = signal<CropRect>(DEFAULT_CROP);
-  protected readonly cropPreviewUrl = signal<string | null>(null);
-  protected readonly applyingCrop = signal(false);
-  protected readonly automaticCropSuggested = signal(false);
   protected readonly cropResizeHandles: CropResizeHandle[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
-  protected readonly processingMode = signal<ProcessingMode>('full-photo');
   protected readonly cameraOpen = signal(false);
   protected readonly processing = signal(false);
-  protected readonly status = signal('Choose a container image to begin.');
+  protected readonly status = signal('');
   protected readonly diagnostics = signal<Diagnostic[]>([]);
   protected readonly rawText = signal<string[]>([]);
   protected readonly fields = signal<Record<FieldKey, ContainerField>>({
@@ -80,6 +74,14 @@ export class App {
   protected readonly canExportCalculatedPayload = computed(() => Boolean(
     this.fields().calculatedPayloadKg.value || this.fields().calculatedPayloadLb.value,
   ));
+  protected readonly payloadKgMismatch = computed(() => this.hasPayloadMismatch(
+    this.fields().payloadKg.value,
+    this.fields().calculatedPayloadKg.value,
+  ));
+  protected readonly payloadLbMismatch = computed(() => this.hasPayloadMismatch(
+    this.fields().payloadLb.value,
+    this.fields().calculatedPayloadLb.value,
+  ));
 
   private stream: MediaStream | null = null;
   private readonly injector = inject(Injector);
@@ -106,18 +108,6 @@ export class App {
     }
     this.useImage(file, file.name);
     input.value = '';
-  }
-
-  protected openCropEditor(): void {
-    this.cropDraft.set(this.cropRect() ?? DEFAULT_CROP);
-    this.automaticCropSuggested.set(false);
-    this.cropEditorOpen.set(true);
-  }
-
-  protected closeCropEditor(): void {
-    this.cropStart = null;
-    this.cropResize = null;
-    this.cropEditorOpen.set(false);
   }
 
   protected startCrop(event: PointerEvent): void {
@@ -172,28 +162,8 @@ export class App {
       this.addDiagnostic('Manual crop', 'Draw a larger rectangle around the marking to scan.');
       return;
     }
-    this.applyingCrop.set(true);
-    this.status.set('Preparing the selected crop...');
-    try {
-      await this.updateCropPreview(crop);
-      this.cropRect.set(crop);
-      this.automaticCropSuggested.set(false);
-      this.cropEditorOpen.set(false);
-      this.status.set('Manual crop ready. Run local OCR to scan only the selected region.');
-    } catch (error: unknown) {
-      this.addDiagnostic('Manual crop', 'The selected region could not be prepared. Adjust the rectangle or choose the image again.', this.errorMessage(error));
-    } finally {
-      this.applyingCrop.set(false);
-    }
-  }
-
-  protected clearCrop(): void {
-    this.cropRect.set(null);
-    this.automaticCropSuggested.set(false);
-    const preview = this.cropPreviewUrl();
-    if (preview) URL.revokeObjectURL(preview);
-    this.cropPreviewUrl.set(null);
-    this.status.set('Manual crop removed. OCR will use the selected processing approach.');
+    this.cropRect.set(crop);
+    await this.processImage();
   }
 
   protected async openCamera(): Promise<void> {
@@ -247,10 +217,6 @@ export class App {
     this.cameraOpen.set(false);
   }
 
-  protected setMode(mode: ProcessingMode): void {
-    this.processingMode.set(mode);
-  }
-
   protected updateField(key: FieldKey, value: string): void {
     this.fields.update((fields) => {
       const updated = {
@@ -281,7 +247,6 @@ export class App {
     }
     this.processing.set(true);
     this.diagnostics.set([]);
-    this.automaticCropSuggested.set(false);
     this.status.set('Preparing local OCR models...');
     const imageUrl = this.previewUrl();
     if (!imageUrl) {
@@ -292,7 +257,7 @@ export class App {
     try {
       this.status.set('Loading local PaddleOCR models...');
       const ocr = await this.getOcr();
-      this.status.set(this.processingMode() === 'guided-crop' ? 'Preparing enlarged marking crops...' : 'Detecting painted text regions...');
+      this.status.set('Detecting painted text in the selected region...');
       const passes = await this.createOcrPasses(image, imageUrl);
       const lines = this.deduplicateLines((await Promise.all(passes.map(async (pass) => {
         try {
@@ -314,22 +279,7 @@ export class App {
       this.payloadExportSource.set(
         fields.calculatedPayloadKg.value || fields.calculatedPayloadLb.value ? 'calculated' : 'detected',
       );
-      let suggestedCrop: CropRect | null = null;
-      if (!this.cropRect()) {
-        try {
-          suggestedCrop = await this.createSuggestedCrop(lines, fields.containerId.value, image);
-        } catch (error: unknown) {
-          this.addDiagnostic('Crop suggestion', 'OCR results are ready, but a suggested crop could not be prepared.', this.errorMessage(error));
-        }
-      }
-      if (suggestedCrop) {
-        this.cropDraft.set(suggestedCrop);
-        this.automaticCropSuggested.set(true);
-        this.cropEditorOpen.set(true);
-        this.status.set('OCR complete. Review the suggested region around the container ID and markings beneath it.');
-      } else {
-        this.status.set(`OCR complete. Found ${lines.length} text region${lines.length === 1 ? '' : 's'}. Review the fields before exporting.`);
-      }
+      this.status.set(`OCR complete. Found ${lines.length} text region${lines.length === 1 ? '' : 's'}. Review the fields before exporting.`);
       this.processing.set(false);
     } catch (error: unknown) {
       this.processing.set(false);
@@ -376,10 +326,6 @@ export class App {
     if (current) {
       URL.revokeObjectURL(current);
     }
-    const cropPreview = this.cropPreviewUrl();
-    if (cropPreview) {
-      URL.revokeObjectURL(cropPreview);
-    }
   }
 
   private useImage(image: Blob, name: string): void {
@@ -390,14 +336,8 @@ export class App {
     this.imageBlob.set(image);
     this.previewUrl.set(URL.createObjectURL(image));
     this.sourceName.set(name);
-    this.applyingCrop.set(false);
-    this.automaticCropSuggested.set(false);
-    this.cropEditorOpen.set(true);
     this.cropRect.set(null);
     this.cropDraft.set(DEFAULT_CROP);
-    const cropPreview = this.cropPreviewUrl();
-    if (cropPreview) URL.revokeObjectURL(cropPreview);
-    this.cropPreviewUrl.set(null);
     this.rawText.set([]);
     const selection = ++this.imageSelection;
     void this.prepareInitialCrop(image, this.previewUrl()!, selection);
@@ -441,8 +381,7 @@ export class App {
       if (selection !== this.imageSelection || this.cropRect()) return;
       if (suggestedCrop) {
         this.cropDraft.set(suggestedCrop);
-        this.automaticCropSuggested.set(true);
-        this.status.set('Container ID located. Review the suggested crop around it and the markings below.');
+      this.status.set('');
       } else {
         this.status.set('Container ID was not located. Draw a crop around the ID and markings you want to scan.');
       }
@@ -483,52 +422,8 @@ export class App {
   }
 
   private async createOcrPasses(image: Blob, imageUrl: string): Promise<Array<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }>> {
-    const manualCrop = this.cropRect();
-    if (manualCrop) {
-      return [
-        await this.createCropPass(image, manualCrop, 1),
-        await this.createCropPass(image, manualCrop, 2),
-      ];
-    }
-    if (this.processingMode() === 'full-photo') {
-      return [{ url: imageUrl, offsetX: 0, offsetY: 0, scale: 1, revokeUrl: false }];
-    }
-
-    const bitmap = await createImageBitmap(image);
-    try {
-      const overlap = 0.12;
-      const passes = [
-        { x: 0, y: 0, width: 0.5 + overlap, height: 0.5 + overlap },
-        { x: 0.5 - overlap, y: 0, width: 0.5 + overlap, height: 0.5 + overlap },
-        { x: 0, y: 0.5 - overlap, width: 0.5 + overlap, height: 0.5 + overlap },
-        { x: 0.5 - overlap, y: 0.5 - overlap, width: 0.5 + overlap, height: 0.5 + overlap },
-      ];
-      const enhancedPasses = await Promise.all(passes.map(async (pass) => {
-        const sourceX = Math.round(pass.x * bitmap.width);
-        const sourceY = Math.round(pass.y * bitmap.height);
-        const sourceWidth = Math.min(bitmap.width - sourceX, Math.round(pass.width * bitmap.width));
-        const sourceHeight = Math.min(bitmap.height - sourceY, Math.round(pass.height * bitmap.height));
-        const scale = 2;
-        const canvas = document.createElement('canvas');
-        canvas.width = sourceWidth * scale;
-        canvas.height = sourceHeight * scale;
-        const context = canvas.getContext('2d');
-        if (!context) {
-          throw new Error('Canvas 2D context is unavailable.');
-        }
-        context.filter = 'contrast(145%) grayscale(100%)';
-        context.drawImage(bitmap, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
-        const crop = await new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => {
-          if (blob) resolve(blob);
-          else reject(new Error('Guided crop could not be created.'));
-        }, 'image/png'));
-        return { url: URL.createObjectURL(crop), offsetX: sourceX, offsetY: sourceY, scale, revokeUrl: true };
-      }));
-      // Keep the native photo because rasterized crops can lose a small ISO check digit.
-      return [{ url: imageUrl, offsetX: 0, offsetY: 0, scale: 1, revokeUrl: false }, ...enhancedPasses];
-    } finally {
-      bitmap.close();
-    }
+    const crop = this.cropRect();
+    return crop ? [await this.createCropPass(image, crop, 1)] : [{ url: imageUrl, offsetX: 0, offsetY: 0, scale: 1, revokeUrl: false }];
   }
 
   private cropPoint(event: PointerEvent): { x: number; y: number } | null {
@@ -564,15 +459,6 @@ export class App {
 
   protected cropResizeHandleLabel(handle: CropResizeHandle): string {
     return `Resize crop from ${handle.replace('-', ' ')}`;
-  }
-
-  private async updateCropPreview(crop: CropRect): Promise<void> {
-    const image = this.imageBlob();
-    if (!image) return;
-    const pass = await this.createCropPass(image, crop, 1, 520);
-    const previous = this.cropPreviewUrl();
-    this.cropPreviewUrl.set(pass.url);
-    if (previous) URL.revokeObjectURL(previous);
   }
 
   private async createSuggestedCrop(lines: OcrLine[], containerId: string, image: Blob): Promise<CropRect | null> {
@@ -705,7 +591,6 @@ export class App {
       source: {
         fileName: this.sourceName(),
         processedAt: new Date().toISOString(),
-        processingMode: this.processingMode(),
         manualCrop: this.cropRect(),
       },
       container: {
@@ -913,13 +798,24 @@ export class App {
     if (!payload.value || !mpgm.value || !tare.value) {
       return { value: '', unit, calculated: true };
     }
-    const parseWeight = (value: string) => Number(value.replace(/[ ,.]/g, ''));
-    const mpgmValue = parseWeight(mpgm.value);
-    const tareValue = parseWeight(tare.value);
+    const mpgmValue = this.weightNumber(mpgm.value);
+    const tareValue = this.weightNumber(tare.value);
     if (!Number.isFinite(mpgmValue) || !Number.isFinite(tareValue) || mpgmValue < tareValue) {
       return { value: '', unit, calculated: true };
     }
-    return { value: String(mpgmValue - tareValue), unit, calculated: true };
+    return { value: this.formatWeight(mpgmValue - tareValue), unit, calculated: true };
+  }
+
+  private hasPayloadMismatch(rawPayload: string, calculatedPayload: string): boolean {
+    return Boolean(rawPayload && calculatedPayload && this.weightNumber(rawPayload) !== this.weightNumber(calculatedPayload));
+  }
+
+  private weightNumber(value: string): number {
+    return Number(value.replace(/[ ,.]/g, ''));
+  }
+
+  private formatWeight(value: number): string {
+    return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
   }
 
   private validateContainerId(value: string): boolean {
