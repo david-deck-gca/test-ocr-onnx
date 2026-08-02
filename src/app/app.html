@@ -37,7 +37,7 @@
         <div class="source-actions"><button class="secondary" type="button" (click)="openCamera()">Take another photo</button><button class="secondary" type="button" (click)="openFilePicker()">Choose another image</button></div>
       }
     </section>
-  
+
     <section class="results" aria-labelledby="results-title">
     <div class="panel-heading"><div class="rescan-guidance"><p class="crop-guidance">If the result is not accurate, narrow the selected region around the markings and scan it again.</p><button class="primary" type="button" [disabled]="!hasImage() || processing()" (click)="applyCrop()">{{ processing() ? 'Processing locally...' : 'Re-run scan with selected region' }}</button></div><div class="result-actions"><button class="secondary" type="button" [disabled]="!hasImage()" (click)="saveJsonToIndexedDb()">Save</button><button class="primary" type="button" [disabled]="!hasImage()" (click)="exportJson()">Export JSON (debug)</button></div></div>
     <div class="field-grid">
@@ -46,15 +46,15 @@
       <div class="weight-row">
         <label>@if (detectedMarkings().mpgm) { <u>MPGM</u> } @else { MPGM } / @if (detectedMarkings().mgw) { <u>MGW</u> } @else { MGW } / @if (detectedMarkings().maxGr) { <u>MAX.GR.</u> } @else { MAX.GR. }<input [value]="fields().mpgmKg.value" (input)="updateField('mpgmKg', $any($event.target).value)" /><span>KG</span></label>
         <label>TARE<input [value]="fields().tareKg.value" (input)="updateField('tareKg', $any($event.target).value)" /><span>KG</span>@if (fields().tareKg.inferred) { <small>Inferred row</small> }</label>
-        <label class="payload-label">PAYLOAD / NET (INFERRED)<div class="payload-comparison" [class.warning-input]="payloadKgMismatch()"><input [value]="fields().payloadKg.value" readonly /><span>(</span><output>{{ fields().calculatedPayloadKg.value }}</output><span>)</span></div><span>KG</span>@if (fields().payloadKg.inferred) { <small>Inferred row</small> }</label>
+        <label class="payload-label">PAYLOAD / NET (INFERRED)<div class="payload-value"><div class="payload-comparison" [class.warning-input]="payloadKgMismatch()"><input [value]="fields().payloadKg.value" readonly /><span>(</span><output>{{ fields().calculatedPayloadKg.value }}</output><span>)</span><span class="payload-unit">KG</span></div></div>@if (fields().payloadKg.inferred) { <small>Inferred row</small> }</label>
       </div>
       <div class="weight-row">
         <label>@if (detectedMarkings().mpgm) { <u>MPGM</u> } @else { MPGM } / @if (detectedMarkings().mgw) { <u>MGW</u> } @else { MGW } / @if (detectedMarkings().maxGr) { <u>MAX.GR.</u> } @else { MAX.GR. }<input [value]="fields().mpgmLb.value" (input)="updateField('mpgmLb', $any($event.target).value)" /><span>LB</span></label>
         <label>TARE<input [value]="fields().tareLb.value" (input)="updateField('tareLb', $any($event.target).value)" /><span>LB</span>@if (fields().tareLb.inferred) { <small>Inferred row</small> }</label>
-        <label class="payload-label">PAYLOAD / NET (INFERRED)<div class="payload-comparison" [class.warning-input]="payloadLbMismatch()"><input [value]="fields().payloadLb.value" readonly /><span>(</span><output>{{ fields().calculatedPayloadLb.value }}</output><span>)</span></div><span>LB</span>@if (fields().payloadLb.inferred) { <small>Inferred row</small> }</label>
+        <label class="payload-label">PAYLOAD / NET (INFERRED)<div class="payload-value"><div class="payload-comparison" [class.warning-input]="payloadLbMismatch()"><input [value]="fields().payloadLb.value" readonly /><span>(</span><output>{{ fields().calculatedPayloadLb.value }}</output><span>)</span><span class="payload-unit">LB</span></div></div>@if (fields().payloadLb.inferred) { <small>Inferred row</small> }</label>
       </div>
        @if (detectedMarkings().payload || detectedMarkings().net) {
-         <fieldset class="payload-export-choice"><legend>Payload value for JSON export</legend><label><input type="radio" name="payload-export-source" [checked]="payloadExportSource() === 'detected'" (change)="setPayloadExportSource('detected')" /> Detected OCR value</label><label><input type="radio" name="payload-export-source" [checked]="payloadExportSource() === 'calculated'" [disabled]="!canExportCalculatedPayload()" (change)="setPayloadExportSource('calculated')" /> Calculated MPGM - TARE value</label></fieldset>
+         <fieldset class="payload-export-choice"><legend>Payload value for JSON export</legend><label><input type="radio" name="payload-export-source" [checked]="payloadExportSource() === 'detected'" (change)="setPayloadExportSource('detected')" /> Detected OCR value</label><label><input type="radio" name="payload-export-source" [checked]="payloadExportSource() === 'calculated'" [disabled]="!canExportCalculatedPayload()" (change)="setPayloadExportSource('calculated')" /> Inferred MPGM - TARE value</label></fieldset>
        }
       <div class="capacity-row">
         <label>CAPACITY<input [value]="fields().capacityLiters.value" (input)="updateField('capacityLiters', $any($event.target).value)" /><span>L</span></label>
