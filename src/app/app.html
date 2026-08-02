@@ -18,8 +18,7 @@
         <div class="camera-frame"><video #videoPreview autoplay playsinline muted></video><div class="camera-actions"><button class="secondary" type="button" (click)="closeCamera()">Cancel</button><button class="primary" type="button" (click)="capturePhoto()">Capture photo</button></div></div>
       } @else if (previewUrl(); as url) {
         @if (cropEditorOpen()) {
-          <section class="crop-editor" aria-labelledby="crop-editor-title">
-            <div><h3 id="crop-editor-title">{{ automaticCropSuggested() ? 'Review suggested marking region' : 'Select a marking region' }}</h3><p>{{ automaticCropSuggested() ? 'OCR located the container ID and text beneath it. Adjust the rectangle if needed before using it.' : 'Drag a rectangle around the container ID or markings you want to read.' }}</p></div>
+          <section class="crop-editor" aria-label="Crop editor">
             <div class="crop-canvas" (pointerdown)="startCrop($event)" (pointermove)="updateCrop($event)" (pointerup)="finishCrop($event)" (pointercancel)="finishCrop($event)">
               <img [src]="url" alt="Container image being cropped" draggable="false" />
               <div class="crop-selection" [style.left.%]="cropDraft().x * 100" [style.top.%]="cropDraft().y * 100" [style.width.%]="cropDraft().width * 100" [style.height.%]="cropDraft().height * 100">
