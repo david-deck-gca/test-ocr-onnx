@@ -328,23 +328,13 @@ export class App {
         this.cropEditorOpen.set(true);
         this.status.set('OCR complete. Review the suggested region around the container ID and markings beneath it.');
       } else {
-        this.status.set(`OCR complete. Found ${lines.length} text region${lines.length === 1 ? '' : 's'}. Review the fields before exporting.`);
+        this.status.set(`OCR complete. Found ${lines.length} text region${lines.length === 1 ? '' : 's'}. Review the fields before saving.`);
       }
       this.processing.set(false);
     } catch (error: unknown) {
       this.processing.set(false);
       this.addDiagnostic('ONNX OCR', 'Local OCR could not process this image.', this.errorMessage(error));
     }
-  }
-
-  protected exportJson(): void {
-    const payload = this.createJsonPayload();
-    const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${this.sourceName().replace(/\.[^.]+$/, '') || 'container'}-ocr.json`;
-    link.click();
-    URL.revokeObjectURL(url);
   }
 
   protected async saveJsonToIndexedDb(): Promise<void> {

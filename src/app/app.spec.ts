@@ -14,11 +14,11 @@ describe('App', () => {
     expect(app).toBeTruthy();
   });
 
-  it('should render the OCR workspace', async () => {
+  it('should render the OCR workspace without panel headings', async () => {
     const fixture = TestBed.createComponent(App);
     await fixture.whenStable();
     const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('#capture-title')?.textContent).toContain('Container side photo');
+    expect(compiled.querySelector('.panel-heading')).toBeNull();
     expect(compiled.querySelector('input[type="file"]')?.getAttribute('capture')).toBeNull();
   });
 
