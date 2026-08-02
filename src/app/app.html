@@ -62,18 +62,13 @@
       <div class="weight-row">
         <label>@if (detectedMarkings().mpgm) { <u>MPGM</u> } @else { MPGM } / @if (detectedMarkings().mgw) { <u>MGW</u> } @else { MGW } / @if (detectedMarkings().maxGr) { <u>MAX.GR.</u> } @else { MAX.GR. }<input [value]="fields().mpgmKg.value" (input)="updateField('mpgmKg', $any($event.target).value)" /><span>KG</span></label>
         <label>TARE<input [value]="fields().tareKg.value" (input)="updateField('tareKg', $any($event.target).value)" /><span>KG</span>@if (fields().tareKg.inferred) { <small>Inferred row</small> }</label>
-        <label>DETECTED @if (detectedMarkings().payload) { <u>PAYLOAD</u> } @else { PAYLOAD } / @if (detectedMarkings().net) { <u>NET</u> } @else { NET }<input [value]="fields().payloadKg.value" (input)="updateField('payloadKg', $any($event.target).value)" /><span>KG</span>@if (fields().payloadKg.inferred) { <small>Inferred row</small> }</label>
-        <label>CALCULATED PAYLOAD / NET<input [value]="fields().calculatedPayloadKg.value" readonly /><span>KG</span></label>
+        <label>@if (detectedMarkings().payload) { <u>PAYLOAD</u> } @else { PAYLOAD } / @if (detectedMarkings().net) { <u>NET</u> } @else { NET }<input [value]="fields().payloadKg.value" (input)="updateField('payloadKg', $any($event.target).value)" /><span>KG</span>@if (fields().payloadKg.inferred) { <small>Inferred row</small> }</label>
       </div>
       <div class="weight-row">
         <label>@if (detectedMarkings().mpgm) { <u>MPGM</u> } @else { MPGM } / @if (detectedMarkings().mgw) { <u>MGW</u> } @else { MGW } / @if (detectedMarkings().maxGr) { <u>MAX.GR.</u> } @else { MAX.GR. }<input [value]="fields().mpgmLb.value" (input)="updateField('mpgmLb', $any($event.target).value)" /><span>LB</span></label>
         <label>TARE<input [value]="fields().tareLb.value" (input)="updateField('tareLb', $any($event.target).value)" /><span>LB</span>@if (fields().tareLb.inferred) { <small>Inferred row</small> }</label>
-        <label>DETECTED @if (detectedMarkings().payload) { <u>PAYLOAD</u> } @else { PAYLOAD } / @if (detectedMarkings().net) { <u>NET</u> } @else { NET }<input [value]="fields().payloadLb.value" (input)="updateField('payloadLb', $any($event.target).value)" /><span>LB</span>@if (fields().payloadLb.inferred) { <small>Inferred row</small> }</label>
-        <label>CALCULATED PAYLOAD / NET<input [value]="fields().calculatedPayloadLb.value" readonly /><span>LB</span></label>
+        <label>@if (detectedMarkings().payload) { <u>PAYLOAD</u> } @else { PAYLOAD } / @if (detectedMarkings().net) { <u>NET</u> } @else { NET }<input [value]="fields().payloadLb.value" (input)="updateField('payloadLb', $any($event.target).value)" /><span>LB</span>@if (fields().payloadLb.inferred) { <small>Inferred row</small> }</label>
       </div>
-       @if (detectedMarkings().payload || detectedMarkings().net) {
-         <fieldset class="payload-export-choice"><legend>Payload value for JSON export</legend><label><input type="radio" name="payload-export-source" [checked]="payloadExportSource() === 'detected'" (change)="setPayloadExportSource('detected')" /> Detected OCR value</label><label><input type="radio" name="payload-export-source" [checked]="payloadExportSource() === 'calculated'" [disabled]="!canExportCalculatedPayload()" (change)="setPayloadExportSource('calculated')" /> Calculated MPGM - TARE value</label></fieldset>
-       }
       <div class="capacity-row">
         <label>CAPACITY<input [value]="fields().capacityLiters.value" (input)="updateField('capacityLiters', $any($event.target).value)" /><span>L</span></label>
         <label>CU.CAP.<input [value]="fields().capacityCubicMeters.value" (input)="updateField('capacityCubicMeters', $any($event.target).value)" /><span>CU.M.</span></label>

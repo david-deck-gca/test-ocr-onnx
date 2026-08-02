@@ -168,7 +168,7 @@ describe('App', () => {
   it('should extract tank container weights without inventing a payload', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
-      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string; calculated?: boolean }>;
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
     };
 
     const fields = app.extractFields([
@@ -191,16 +191,13 @@ describe('App', () => {
     expect(fields['tareLb'].value).toBe('8047');
     expect(fields['payloadKg'].value).toBe('');
     expect(fields['payloadLb'].value).toBe('');
-    expect(fields['calculatedPayloadKg'].value).toBe('');
-    expect(fields['calculatedPayloadLb'].value).toBe('');
-    expect(fields['payloadKg'].calculated).toBeUndefined();
     expect(fields['capacityLiters'].value).toBe('25,000');
   });
 
-  it('should preserve a printed payload instead of labeling it calculated', () => {
+  it('should preserve a printed payload', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
-      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string; calculated?: boolean }>;
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
     };
 
     const fields = app.extractFields([
@@ -210,9 +207,6 @@ describe('App', () => {
     ]);
 
     expect(fields['payloadKg'].value).toBe('32350');
-    expect(fields['payloadKg'].calculated).toBe(false);
-    expect(fields['calculatedPayloadKg'].value).toBe('32350');
-    expect(fields['calculatedPayloadKg'].calculated).toBe(true);
   });
 
   it('should recognize common OCR variants of payload and capacity labels', () => {
@@ -260,7 +254,7 @@ describe('App', () => {
   it('should preserve a payload returned several OCR lines after its label', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
-      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string; calculated?: boolean }>;
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
     };
 
     const fields = app.extractFields([
@@ -275,7 +269,6 @@ describe('App', () => {
     ]);
 
     expect(fields['payloadKg'].value).toBe('32.350');
-    expect(fields['payloadKg'].calculated).toBe(false);
   });
 
   it('should select the TARE value closest to its label', () => {
@@ -316,7 +309,7 @@ describe('App', () => {
   it('should extract standard general-purpose container markings', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
-      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string; calculated?: boolean }>;
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
     };
 
     const fields = app.extractFields([
@@ -330,9 +323,6 @@ describe('App', () => {
     expect(fields['mpgmLb'].value).toBe('6.610');
     expect(fields['payloadKg'].value).toBe('2.440');
     expect(fields['payloadLb'].value).toBe('5.380');
-    expect(fields['payloadKg'].calculated).toBe(false);
-    expect(fields['calculatedPayloadKg'].value).toBe('2440');
-    expect(fields['calculatedPayloadLb'].value).toBe('5380');
     expect(fields['capacityCubicMeters'].value).toBe('4.6');
     expect(fields['capacityCubicFeet'].value).toBe('162');
   });
