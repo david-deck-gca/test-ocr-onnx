@@ -57,7 +57,7 @@
       </div>
       <div class="status" [class.busy]="processing()"><span></span><p>{{ status() }}</p></div>
       <button class="primary run-button" type="button" [disabled]="!hasImage() || processing() || cropEditorOpen()" (click)="processImage()">{{ processing() ? 'Processing locally...' : 'Run local OCR' }}</button>
-      <p class="helper">No image data is uploaded. Crop selection is the default; the selected region is scanned at the image's original resolution.</p>
+      <p class="helper">No image data is uploaded. Crop selection is the default; the selected region is safely prepared for on-device OCR.</p>
     </section>
   </section>
 
