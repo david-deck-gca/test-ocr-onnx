@@ -70,7 +70,7 @@
       @if (savedRecords().length) {
         <ul>
           @for (record of savedRecords(); track record.id) {
-            <li><div class="saved-photo">@if (record.photoUrl) { <img [src]="record.photoUrl" alt="Saved container photo" /> } @else { <span>Photo unavailable</span> }</div><div class="saved-record-details"><strong>{{ savedRecordLabel(record) }}</strong><span>{{ savedAtLabel(record.savedAt) }}</span><small>{{ record.fileName || 'Saved JSON record' }}</small></div><button class="secondary" type="button" (click)="deleteSavedRecord(record.id)">Delete</button></li>
+            <li><div class="saved-photo">@if (record.photoUrl) { <img [src]="record.photoUrl" alt="Saved container photo" /> } @else { <span>Photo unavailable</span> }</div><div class="saved-record-details"><strong>{{ savedRecordLabel(record) }}</strong><span>{{ savedAtLabel(record.savedAt) }}</span><small>{{ record.fileName || 'Saved JSON record' }}</small><details><summary>OCR data</summary><pre>{{ savedRecordJson(record) }}</pre></details></div><button class="secondary" type="button" (click)="deleteSavedRecord(record.id)">Delete</button></li>
           }
         </ul>
       } @else {

@@ -358,7 +358,7 @@ describe('App', () => {
       rawText: () => string[];
       getOcr(): Promise<{ detect(url: string): Promise<Array<{ text: string; mean: number; box: number[][] }>> }>;
        createSuggestedCrop(lines: Array<{ text: string; mean: number; box: number[][] }>, containerId: string, imageWidth: number, imageHeight: number): { x: number; y: number; width: number; height: number } | null;
-       createCropPass(image: Blob, crop: { x: number; y: number; width: number; height: number }, scale: number, maximumDimension?: number): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean; sourceWidth: number; sourceHeight: number }>;
+        createFullImagePass(image: Blob): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean; sourceWidth: number; sourceHeight: number }>;
        prepareInitialCrop(image: Blob, selection: number): Promise<void>;
     };
     const focusedCrop = { x: 0.3, y: 0.2, width: 0.4, height: 0.35 };
@@ -366,7 +366,7 @@ describe('App', () => {
     app.getOcr = async () => ({
       detect: async () => [{ text: 'HCSU 799790 9', mean: 0.95, box: [[300, 100], [500, 100], [500, 130], [300, 130]] }],
     });
-    app.createCropPass = async () => ({ url: 'blob:test', offsetX: 0, offsetY: 0, scale: 1, revokeUrl: true, sourceWidth: 1000, sourceHeight: 500 });
+    app.createFullImagePass = async () => ({ url: 'blob:test', offsetX: 0, offsetY: 0, scale: 1, revokeUrl: true, sourceWidth: 1000, sourceHeight: 500 });
     app.createSuggestedCrop = () => focusedCrop;
 
     await app.prepareInitialCrop(new Blob(), 1);

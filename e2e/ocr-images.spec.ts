@@ -101,3 +101,10 @@ for (const [fileName, expectedMarkings] of Object.entries(expectedMarkingsByFile
     }
   });
 }
+
+test('detects the printed check digit in general-purpose_4ft_frontal.webp', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('input[type="file"]').setInputFiles(join(process.cwd(), 'images', 'general-purpose_4ft_frontal.webp'));
+
+  await expect(page.locator('.raw-text')).toContainText('SDNU 920459 4', { timeout: 90_000 });
+});

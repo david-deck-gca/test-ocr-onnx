@@ -39,6 +39,7 @@ interface SavedRecordPreview {
   savedAt: string;
   containerId: string;
   fileName: string;
+  payload: object;
   photoUrl: string | null;
 }
 
@@ -367,6 +368,10 @@ export class App {
     return new Date(savedAt).toLocaleString();
   }
 
+  protected savedRecordJson(record: SavedRecordPreview): string {
+    return JSON.stringify(record.payload, null, 2);
+  }
+
   protected dismissDiagnostics(): void {
     this.diagnostics.set([]);
   }
@@ -420,7 +425,7 @@ export class App {
     this.status.set('Locating the container ID and markings in the full photo...');
     try {
       const ocr = await this.getOcr();
-      const pass = await this.createCropPass(image, DEFAULT_CROP, 1);
+      const pass = await this.createFullImagePass(image);
       let lines: OcrLine[];
       try {
         lines = this.deduplicateLines((await ocr.detect(pass.url)).map((line) => ({
@@ -484,7 +489,7 @@ export class App {
 
   private async createOcrPasses(image: Blob): Promise<OcrPass[]> {
     const crop = this.cropRect();
-    return [await this.createCropPass(image, crop ?? DEFAULT_CROP, 1)];
+    return [crop ? await this.createCropPass(image, crop, 1) : await this.createFullImagePass(image)];
   }
 
   private cropPoint(event: PointerEvent): { x: number; y: number } | null {
@@ -617,6 +622,23 @@ export class App {
       canvas.width = 0;
       canvas.height = 0;
       return { url: URL.createObjectURL(blob), offsetX: sourceX, offsetY: sourceY, scale: outputScale, revokeUrl: true, sourceWidth: bitmap.width, sourceHeight: bitmap.height };
+    } finally {
+      bitmap.close();
+    }
+  }
+
+  private async createFullImagePass(image: Blob): Promise<OcrPass> {
+    const bitmap = await createImageBitmap(image);
+    try {
+      return {
+        url: URL.createObjectURL(image),
+        offsetX: 0,
+        offsetY: 0,
+        scale: 1,
+        revokeUrl: true,
+        sourceWidth: bitmap.width,
+        sourceHeight: bitmap.height,
+      };
     } finally {
       bitmap.close();
     }
@@ -894,6 +916,7 @@ export class App {
             savedAt: record.savedAt,
             containerId: record.containerId,
             fileName: record.fileName,
+            payload: record.payload,
             photoUrl,
           };
         }));
