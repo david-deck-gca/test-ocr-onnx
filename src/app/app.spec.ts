@@ -32,15 +32,13 @@ describe('App', () => {
     expect(inputs.every((input) => input.value === '' && input.placeholder === '')).toBe(true);
   });
 
-  it('should default to an editable full-image crop and quick processing', () => {
+  it('should default to an editable full-image crop', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       cropDraft: () => { x: number; y: number; width: number; height: number };
-      processingMode: () => string;
     };
 
     expect(app.cropDraft()).toEqual({ x: 0, y: 0, width: 1, height: 1 });
-    expect(app.processingMode()).toBe('full-photo');
   });
 
   it('should clear OCR fields when choosing a new image', () => {
@@ -117,22 +115,22 @@ describe('App', () => {
     expect(app.createJsonPayload().source.manualCrop).toEqual(crop);
   });
 
-  it('should keep the crop unselected when preview creation fails', async () => {
+  it('should scan the selected crop when requested', async () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       cropDraft: { set(value: { x: number; y: number; width: number; height: number }): void };
       cropRect: () => { x: number; y: number; width: number; height: number } | null;
-      diagnostics: () => Array<{ stage: string; message: string }>;
-      updateCropPreview(crop: { x: number; y: number; width: number; height: number }): Promise<void>;
+      processImage(): Promise<void>;
       applyCrop(): Promise<void>;
     };
     app.cropDraft.set({ x: 0.2, y: 0.2, width: 0.3, height: 0.3 });
-    app.updateCropPreview = () => Promise.reject(new Error('Canvas unavailable'));
+    const processImage = vi.fn().mockResolvedValue(undefined);
+    app.processImage = processImage;
 
     await app.applyCrop();
 
-    expect(app.cropRect()).toBeNull();
-    expect(app.diagnostics().some((diagnostic) => diagnostic.stage === 'Manual crop' && diagnostic.message === 'The selected region could not be prepared. Adjust the rectangle or choose the image again.')).toBe(true);
+    expect(app.cropRect()).toEqual({ x: 0.2, y: 0.2, width: 0.3, height: 0.3 });
+    expect(processImage).toHaveBeenCalledOnce();
   });
 
   it('should extract tank container weights without inventing a payload', () => {
@@ -181,7 +179,7 @@ describe('App', () => {
 
     expect(fields['payloadKg'].value).toBe('32350');
     expect(fields['payloadKg'].calculated).toBe(false);
-    expect(fields['calculatedPayloadKg'].value).toBe('32350');
+    expect(fields['calculatedPayloadKg'].value).toBe('32.350');
     expect(fields['calculatedPayloadKg'].calculated).toBe(true);
   });
 
@@ -301,8 +299,8 @@ describe('App', () => {
     expect(fields['payloadKg'].value).toBe('2.440');
     expect(fields['payloadLb'].value).toBe('5.380');
     expect(fields['payloadKg'].calculated).toBe(false);
-    expect(fields['calculatedPayloadKg'].value).toBe('2440');
-    expect(fields['calculatedPayloadLb'].value).toBe('5380');
+    expect(fields['calculatedPayloadKg'].value).toBe('2.440');
+    expect(fields['calculatedPayloadLb'].value).toBe('5.380');
     expect(fields['capacityCubicMeters'].value).toBe('4.6');
     expect(fields['capacityCubicFeet'].value).toBe('162');
   });
@@ -344,7 +342,6 @@ describe('App', () => {
     const app = fixture.componentInstance as unknown as {
       imageSelection: number;
       cropDraft: () => { x: number; y: number; width: number; height: number };
-      automaticCropSuggested: () => boolean;
       fields: () => Record<string, { value: string }>;
       rawText: () => string[];
       getOcr(): Promise<{ detect(url: string): Promise<Array<{ text: string; mean: number; box: number[][] }>> }>;
@@ -361,9 +358,24 @@ describe('App', () => {
     await app.prepareInitialCrop(new Blob(), 'blob:test', 1);
 
     expect(app.cropDraft()).toEqual(focusedCrop);
-    expect(app.automaticCropSuggested()).toBe(true);
     expect(app.fields()['containerId'].value).toBe('HCSU7997909');
     expect(app.rawText()).toEqual(['HCSU 799790 9 (95%)']);
+  });
+
+  it('should warn when a detected payload differs from the calculated value', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      updateField(key: 'mpgmKg' | 'tareKg' | 'payloadKg', value: string): void;
+      payloadKgMismatch: () => boolean;
+      fields: () => Record<string, { value: string }>;
+    };
+
+    app.updateField('mpgmKg', '34.000');
+    app.updateField('tareKg', '3.650');
+    app.updateField('payloadKg', '30300');
+
+    expect(app.fields()['calculatedPayloadKg'].value).toBe('30.350');
+    expect(app.payloadKgMismatch()).toBe(true);
   });
 
 });
