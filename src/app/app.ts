@@ -10,7 +10,6 @@ type CropRect = { x: number; y: number; width: number; height: number };
 type BoxBounds = { left: number; top: number; right: number; bottom: number };
 type CropResizeHandle = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 const DEFAULT_CROP: CropRect = { x: 0, y: 0, width: 1, height: 1 };
-const MAXIMUM_CROP_DIMENSION = 2048;
 
 interface ContainerField {
   value: string;
@@ -176,14 +175,10 @@ export class App {
     this.applyingCrop.set(true);
     this.status.set('Preparing the selected crop...');
     try {
+      await this.updateCropPreview(crop);
       this.cropRect.set(crop);
       this.automaticCropSuggested.set(false);
       this.cropEditorOpen.set(false);
-      try {
-        await this.updateCropPreview(crop);
-      } catch (error: unknown) {
-        this.addDiagnostic('Crop preview', 'The selected region was saved, but its preview could not be generated.', this.errorMessage(error));
-      }
       this.status.set('Manual crop ready. Run local OCR to scan only the selected region.');
     } catch (error: unknown) {
       this.addDiagnostic('Manual crop', 'The selected region could not be prepared. Adjust the rectangle or choose the image again.', this.errorMessage(error));
@@ -483,17 +478,10 @@ export class App {
   private async createOcrPasses(image: Blob, imageUrl: string): Promise<Array<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }>> {
     const manualCrop = this.cropRect();
     if (manualCrop) {
-      const nativeCrop = await this.createCropPass(image, manualCrop, 1, MAXIMUM_CROP_DIMENSION);
-      try {
-        const enhancedCrop = await this.createCropPass(image, manualCrop, 2, MAXIMUM_CROP_DIMENSION);
-        if (enhancedCrop.scale > nativeCrop.scale) {
-          return [nativeCrop, enhancedCrop];
-        }
-        URL.revokeObjectURL(enhancedCrop.url);
-      } catch (error: unknown) {
-        this.addDiagnostic('Enhanced crop', 'The selected region will be scanned without enlargement.', this.errorMessage(error));
-      }
-      return [nativeCrop];
+      return [
+        await this.createCropPass(image, manualCrop, 1),
+        await this.createCropPass(image, manualCrop, 2),
+      ];
     }
     if (this.processingMode() === 'full-photo') {
       return [{ url: imageUrl, offsetX: 0, offsetY: 0, scale: 1, revokeUrl: false }];
@@ -610,23 +598,13 @@ export class App {
 
     const idWidth = idBounds.right - idBounds.left;
     const idHeight = idBounds.bottom - idBounds.top;
-    // Restrict the proposal to the ID's front-panel column. In an oblique image,
-    // side-plane markings can overlap the ID row or extend far beyond it.
-    const sideAllowance = Math.max(idWidth * 0.25, idHeight * 2);
-    const columnLeft = idBounds.left - sideAllowance;
-    const columnRight = idBounds.right + sideAllowance;
+    const horizontalAllowance = Math.max(idWidth * 1.5, idHeight * 8);
     const relevantBounds = lines
       .map((line) => this.boxBounds(line.box))
       .filter((bounds): bounds is BoxBounds => Boolean(bounds))
-      .filter((bounds) => bounds.top >= idBounds.bottom - idHeight * 0.5
-        && bounds.left <= idBounds.right
-        && bounds.right >= idBounds.left)
-      .map((bounds) => ({
-        left: Math.max(bounds.left, columnLeft),
-        top: bounds.top,
-        right: Math.min(bounds.right, columnRight),
-        bottom: bounds.bottom,
-      }));
+      .filter((bounds) => bounds.bottom >= idBounds.top - idHeight
+        && bounds.right >= idBounds.left - horizontalAllowance
+        && bounds.left <= idBounds.right + horizontalAllowance);
     return this.combineBounds([idBounds, ...relevantBounds]);
   }
 
@@ -644,18 +622,8 @@ export class App {
     for (let start = 0; start < fragments.length; start++) {
       for (let length = 1; length <= 3 && start + length <= fragments.length; length++) {
         const candidate = fragments.slice(start, start + length);
-        const candidateText = candidate.map((fragment) => fragment.text).join('');
-        const matchStart = candidateText.indexOf(normalizedId);
-        if (matchStart >= 0) {
-          const matchEnd = matchStart + normalizedId.length;
-          let offset = 0;
-          return candidate
-            .filter((fragment) => {
-              const fragmentStart = offset;
-              offset += fragment.text.length;
-              return fragmentStart < matchEnd && offset > matchStart;
-            })
-            .map((fragment) => fragment.line);
+        if (candidate.map((fragment) => fragment.text).join('').includes(normalizedId)) {
+          return candidate.map((fragment) => fragment.line);
         }
       }
     }
@@ -679,16 +647,14 @@ export class App {
     };
   }
 
-  private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumDimension?: number): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }> {
+  private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumWidth?: number): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }> {
     const bitmap = await createImageBitmap(image);
     try {
       const sourceX = Math.round(crop.x * bitmap.width);
       const sourceY = Math.round(crop.y * bitmap.height);
       const sourceWidth = Math.max(1, Math.round(crop.width * bitmap.width));
       const sourceHeight = Math.max(1, Math.round(crop.height * bitmap.height));
-      const outputScale = maximumDimension
-        ? Math.min(scale, maximumDimension / Math.max(sourceWidth, sourceHeight))
-        : scale;
+      const outputScale = maximumWidth ? Math.min(1, maximumWidth / sourceWidth) : scale;
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(sourceWidth * outputScale));
       canvas.height = Math.max(1, Math.round(sourceHeight * outputScale));
