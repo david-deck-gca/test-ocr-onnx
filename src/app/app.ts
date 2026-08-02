@@ -9,6 +9,7 @@ type OcrLine = { text: string; mean: number; box?: number[][] };
 type CropRect = { x: number; y: number; width: number; height: number };
 type BoxBounds = { left: number; top: number; right: number; bottom: number };
 type CropResizeHandle = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+type DecodedImage = { source: CanvasImageSource; width: number; height: number; release: () => void };
 const DEFAULT_CROP: CropRect = { x: 0, y: 0, width: 1, height: 1 };
 
 interface ContainerField {
@@ -477,7 +478,7 @@ export class App {
       return [{ url: imageUrl, offsetX: 0, offsetY: 0, scale: 1, revokeUrl: false }];
     }
 
-    const bitmap = await createImageBitmap(image);
+    const decodedImage = await this.decodeImage(image);
     try {
       const overlap = 0.12;
       const passes = [
@@ -487,10 +488,10 @@ export class App {
         { x: 0.5 - overlap, y: 0.5 - overlap, width: 0.5 + overlap, height: 0.5 + overlap },
       ];
       const enhancedPasses = await Promise.all(passes.map(async (pass) => {
-        const sourceX = Math.round(pass.x * bitmap.width);
-        const sourceY = Math.round(pass.y * bitmap.height);
-        const sourceWidth = Math.min(bitmap.width - sourceX, Math.round(pass.width * bitmap.width));
-        const sourceHeight = Math.min(bitmap.height - sourceY, Math.round(pass.height * bitmap.height));
+        const sourceX = Math.round(pass.x * decodedImage.width);
+        const sourceY = Math.round(pass.y * decodedImage.height);
+        const sourceWidth = Math.min(decodedImage.width - sourceX, Math.round(pass.width * decodedImage.width));
+        const sourceHeight = Math.min(decodedImage.height - sourceY, Math.round(pass.height * decodedImage.height));
         const scale = 2;
         const canvas = document.createElement('canvas');
         canvas.width = sourceWidth * scale;
@@ -500,7 +501,7 @@ export class App {
           throw new Error('Canvas 2D context is unavailable.');
         }
         context.filter = 'contrast(145%) grayscale(100%)';
-        context.drawImage(bitmap, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+        context.drawImage(decodedImage.source, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
         const crop = await new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => {
           if (blob) resolve(blob);
           else reject(new Error('Guided crop could not be created.'));
@@ -510,7 +511,7 @@ export class App {
       // Keep the native photo because rasterized crops can lose a small ISO check digit.
       return [{ url: imageUrl, offsetX: 0, offsetY: 0, scale: 1, revokeUrl: false }, ...enhancedPasses];
     } finally {
-      bitmap.close();
+      decodedImage.release();
     }
   }
 
@@ -562,21 +563,21 @@ export class App {
     const markingsBounds = this.suggestedMarkingBounds(lines, containerId);
     if (!markingsBounds) return null;
 
-    const bitmap = await createImageBitmap(image);
+    const decodedImage = await this.decodeImage(image);
     try {
       const padding = Math.max(24, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.08);
       const left = Math.max(0, markingsBounds.left - padding);
       const top = Math.max(0, markingsBounds.top - padding);
-      const right = Math.min(bitmap.width, markingsBounds.right + padding);
-      const bottom = Math.min(bitmap.height, markingsBounds.bottom + padding);
+      const right = Math.min(decodedImage.width, markingsBounds.right + padding);
+      const bottom = Math.min(decodedImage.height, markingsBounds.bottom + padding);
       return {
-        x: left / bitmap.width,
-        y: top / bitmap.height,
-        width: (right - left) / bitmap.width,
-        height: (bottom - top) / bitmap.height,
+        x: left / decodedImage.width,
+        y: top / decodedImage.height,
+        width: (right - left) / decodedImage.width,
+        height: (bottom - top) / decodedImage.height,
       };
     } finally {
-      bitmap.close();
+      decodedImage.release();
     }
   }
 
@@ -638,26 +639,52 @@ export class App {
   }
 
   private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumWidth?: number): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }> {
-    const bitmap = await createImageBitmap(image);
+    const decodedImage = await this.decodeImage(image);
     try {
-      const sourceX = Math.round(crop.x * bitmap.width);
-      const sourceY = Math.round(crop.y * bitmap.height);
-      const sourceWidth = Math.max(1, Math.round(crop.width * bitmap.width));
-      const sourceHeight = Math.max(1, Math.round(crop.height * bitmap.height));
+      const sourceX = Math.round(crop.x * decodedImage.width);
+      const sourceY = Math.round(crop.y * decodedImage.height);
+      const sourceWidth = Math.max(1, Math.round(crop.width * decodedImage.width));
+      const sourceHeight = Math.max(1, Math.round(crop.height * decodedImage.height));
       const outputScale = maximumWidth ? Math.min(1, maximumWidth / sourceWidth) : scale;
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(sourceWidth * outputScale));
       canvas.height = Math.max(1, Math.round(sourceHeight * outputScale));
       const context = canvas.getContext('2d');
       if (!context) throw new Error('Canvas 2D context is unavailable.');
-      context.drawImage(bitmap, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+      context.drawImage(decodedImage.source, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
       const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((result) => {
         if (result) resolve(result);
         else reject(new Error('Manual crop could not be created.'));
       }, 'image/png'));
       return { url: URL.createObjectURL(blob), offsetX: sourceX, offsetY: sourceY, scale: outputScale, revokeUrl: true };
     } finally {
-      bitmap.close();
+      decodedImage.release();
+    }
+  }
+
+  private async decodeImage(image: Blob): Promise<DecodedImage> {
+    try {
+      const bitmap = await createImageBitmap(image);
+      return { source: bitmap, width: bitmap.width, height: bitmap.height, release: () => bitmap.close() };
+    } catch {
+      const url = URL.createObjectURL(image);
+      const element = new Image();
+      try {
+        element.src = url;
+        await element.decode();
+        if (!element.naturalWidth || !element.naturalHeight) {
+          throw new Error('The source image has no decodable dimensions.');
+        }
+        return {
+          source: element,
+          width: element.naturalWidth,
+          height: element.naturalHeight,
+          release: () => URL.revokeObjectURL(url),
+        };
+      } catch (error: unknown) {
+        URL.revokeObjectURL(url);
+        throw error;
+      }
     }
   }
 

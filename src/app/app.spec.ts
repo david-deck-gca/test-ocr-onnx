@@ -134,6 +134,37 @@ describe('App', () => {
     expect(app.diagnostics().some((diagnostic) => diagnostic.stage === 'Manual crop' && diagnostic.message === 'The selected region could not be prepared. Adjust the rectangle or choose the image again.')).toBe(true);
   });
 
+  it('should fall back to an image element when bitmap decoding fails', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      decodeImage(image: Blob): Promise<{ width: number; height: number; release(): void }>;
+    };
+    const createObjectUrl = vi.fn().mockReturnValue('blob:fallback-image');
+    const revokeObjectUrl = vi.fn();
+    const decode = vi.fn().mockResolvedValue(undefined);
+
+    vi.stubGlobal('createImageBitmap', vi.fn().mockRejectedValue(new Error('WebP bitmap decoding failed')));
+    vi.stubGlobal('URL', { createObjectURL: createObjectUrl, revokeObjectURL: revokeObjectUrl });
+    vi.stubGlobal('Image', class {
+      naturalWidth = 768;
+      naturalHeight = 768;
+      src = '';
+      decode = decode;
+    });
+
+    try {
+      const decoded = await app.decodeImage(new Blob(['image'], { type: 'image/webp' }));
+
+      expect(decode).toHaveBeenCalled();
+      expect(decoded.width).toBe(768);
+      expect(decoded.height).toBe(768);
+      decoded.release();
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:fallback-image');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('should extract tank container weights without inventing a payload', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
