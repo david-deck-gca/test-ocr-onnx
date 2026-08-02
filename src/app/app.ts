@@ -26,6 +26,23 @@ interface Diagnostic {
   technical?: string;
 }
 
+interface StoredRecord {
+  id: string;
+  savedAt: string;
+  containerId: string;
+  fileName: string;
+  payload: object;
+  photo?: Blob;
+}
+
+interface SavedRecordPreview {
+  id: string;
+  savedAt: string;
+  containerId: string;
+  fileName: string;
+  photoUrl: string | null;
+}
+
 @Component({
   selector: 'app-root',
   templateUrl: './app.html',
@@ -45,6 +62,8 @@ export class App {
   protected readonly status = signal('');
   protected readonly diagnostics = signal<Diagnostic[]>([]);
   protected readonly rawText = signal<string[]>([]);
+  protected readonly savedRecords = signal<SavedRecordPreview[]>([]);
+  protected readonly saving = signal(false);
   protected readonly fields = signal<Record<FieldKey, ContainerField>>({
     containerId: { value: '' },
     isoCode: { value: '' },
@@ -91,6 +110,11 @@ export class App {
   private cropStart: { x: number; y: number } | null = null;
   private cropResize: { handle: CropResizeHandle; crop: CropRect } | null = null;
   private imageSelection = 0;
+  private readonly savedPhotoUrls = new Set<string>();
+
+  constructor() {
+    afterNextRender(() => void this.loadSavedRecords(), { injector: this.injector });
+  }
 
   protected openFilePicker(): void {
     this.clearFields();
@@ -284,22 +308,64 @@ export class App {
   }
 
   protected async saveJsonToIndexedDb(): Promise<void> {
+    const photo = this.imageBlob();
+    if (!photo) {
+      this.addDiagnostic('Saved records', 'Choose or capture a photo before saving.');
+      return;
+    }
+    this.saving.set(true);
     try {
       const database = await this.openSavedRecordsDatabase();
       const payload = this.createJsonPayload();
       const id = crypto.randomUUID();
       await new Promise<void>((resolve, reject) => {
         const transaction = database.transaction('records', 'readwrite');
-        transaction.objectStore('records').add({ id, savedAt: new Date().toISOString(), payload });
+        transaction.objectStore('records').add({
+          id,
+          savedAt: new Date().toISOString(),
+          containerId: this.fields().containerId.value,
+          fileName: this.sourceName(),
+          payload,
+          photo,
+        } satisfies StoredRecord);
         transaction.oncomplete = () => resolve();
         transaction.onerror = () => reject(transaction.error);
         transaction.onabort = () => reject(transaction.error);
       });
       database.close();
-      this.status.set('JSON data saved locally in IndexedDB.');
+      await this.loadSavedRecords();
+      this.status.set('Photo and JSON data saved locally in IndexedDB.');
     } catch (error: unknown) {
-      this.addDiagnostic('IndexedDB', 'JSON data could not be saved locally.', this.errorMessage(error));
+      this.addDiagnostic('IndexedDB', 'The photo and JSON data could not be saved locally.', this.errorMessage(error));
+    } finally {
+      this.saving.set(false);
     }
+  }
+
+  protected async deleteSavedRecord(id: string): Promise<void> {
+    try {
+      const database = await this.openSavedRecordsDatabase();
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction('records', 'readwrite');
+        transaction.objectStore('records').delete(id);
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+      });
+      database.close();
+      await this.loadSavedRecords();
+      this.status.set('Saved record deleted.');
+    } catch (error: unknown) {
+      this.addDiagnostic('IndexedDB', 'The saved record could not be deleted.', this.errorMessage(error));
+    }
+  }
+
+  protected savedRecordLabel(record: SavedRecordPreview): string {
+    return record.containerId || record.fileName || 'Unnamed container';
+  }
+
+  protected savedAtLabel(savedAt: string): string {
+    return new Date(savedAt).toLocaleString();
   }
 
   protected dismissDiagnostics(): void {
@@ -312,6 +378,7 @@ export class App {
     if (current) {
       URL.revokeObjectURL(current);
     }
+    this.releaseSavedPhotoUrls();
   }
 
   private useImage(image: Blob, name: string): void {
@@ -800,6 +867,43 @@ export class App {
       return { value: '', unit, calculated: true };
     }
     return { value: this.formatWeight(mpgmValue - tareValue), unit, calculated: true };
+  }
+
+  private async loadSavedRecords(): Promise<void> {
+    if (!('indexedDB' in window)) {
+      return;
+    }
+    try {
+      const database = await this.openSavedRecordsDatabase();
+      const records = await new Promise<StoredRecord[]>((resolve, reject) => {
+        const transaction = database.transaction('records', 'readonly');
+        const request = transaction.objectStore('records').getAll();
+        request.onsuccess = () => resolve(request.result as StoredRecord[]);
+        request.onerror = () => reject(request.error);
+      });
+      database.close();
+      this.releaseSavedPhotoUrls();
+      this.savedRecords.set(records
+        .sort((first, second) => second.savedAt.localeCompare(first.savedAt))
+        .map((record) => {
+          const photoUrl = record.photo ? URL.createObjectURL(record.photo) : null;
+          if (photoUrl) this.savedPhotoUrls.add(photoUrl);
+          return {
+            id: record.id,
+            savedAt: record.savedAt,
+            containerId: record.containerId,
+            fileName: record.fileName,
+            photoUrl,
+          };
+        }));
+    } catch {
+      // Saved-record history is optional; save operations report their own errors.
+    }
+  }
+
+  private releaseSavedPhotoUrls(): void {
+    this.savedPhotoUrls.forEach((url) => URL.revokeObjectURL(url));
+    this.savedPhotoUrls.clear();
   }
 
   private hasPayloadMismatch(rawPayload: string, calculatedPayload: string): boolean {

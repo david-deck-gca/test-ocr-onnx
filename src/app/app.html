@@ -39,7 +39,7 @@
     </section>
 
     <section class="results" aria-labelledby="results-title">
-    <div class="panel-heading"><div class="rescan-guidance"><p class="crop-guidance">If the result is not accurate, narrow the selected region around the markings and scan it again.</p><button class="primary" type="button" [disabled]="!hasImage() || processing()" (click)="applyCrop()">{{ processing() ? 'Processing locally...' : 'Re-run scan with selected region' }}</button></div><div class="result-actions"><button class="secondary" type="button" [disabled]="!hasImage()" (click)="saveJsonToIndexedDb()">Save</button></div></div>
+    <div class="panel-heading"><div class="rescan-guidance"><p class="crop-guidance">If the result is not accurate, narrow the selected region around the markings and scan it again.</p><button class="primary" type="button" [disabled]="!hasImage() || processing()" (click)="applyCrop()">{{ processing() ? 'Processing locally...' : 'Re-run scan with selected region' }}</button></div><div class="result-actions"><button class="secondary" type="button" [disabled]="!imageBlob() || saving()" (click)="saveJsonToIndexedDb()">{{ saving() ? 'Saving...' : 'Save photo & data' }}</button></div></div>
     <div class="field-grid">
       <label class="wide container-id-field">Container ID<div class="container-id-value"><input [value]="fields().containerId.value" (input)="updateField('containerId', $any($event.target).value)" autocapitalize="characters" />@if (fields().containerId.value) { <span [class.valid]="containerIdValid()" [class.invalid]="!containerIdValid()">{{ containerIdValid() ? 'ISO 6346 check digit valid' : 'Check the ID or check digit' }}</span> }</div></label>
       <label>ISO CODE<input [value]="fields().isoCode.value" (input)="updateField('isoCode', $any($event.target).value)" autocapitalize="characters" /></label>
@@ -63,6 +63,19 @@
       </div>
     </div>
     <div class="raw-text"><h3>Raw detected text</h3>@if (rawText().length) { <ul>@for (line of rawText(); track line) { <li>{{ line }}</li> }</ul> } @else { <p>Detected lines will be retained here with the exported record.</p> }</div>
+    </section>
+
+    <section class="saved-records" aria-labelledby="saved-records-title">
+      <div class="saved-records-heading"><div><p class="eyebrow">LOCAL RECORDS</p><h2 id="saved-records-title">Saved photos</h2></div><span>{{ savedRecords().length }}</span></div>
+      @if (savedRecords().length) {
+        <ul>
+          @for (record of savedRecords(); track record.id) {
+            <li><div class="saved-photo">@if (record.photoUrl) { <img [src]="record.photoUrl" alt="Saved container photo" /> } @else { <span>Photo unavailable</span> }</div><div class="saved-record-details"><strong>{{ savedRecordLabel(record) }}</strong><span>{{ savedAtLabel(record.savedAt) }}</span><small>{{ record.fileName || 'Saved JSON record' }}</small></div><button class="secondary" type="button" (click)="deleteSavedRecord(record.id)">Delete</button></li>
+          }
+        </ul>
+      } @else {
+        <p class="saved-records-empty">Saved photos and their OCR data will appear here.</p>
+      }
     </section>
   </section>
 </main>
