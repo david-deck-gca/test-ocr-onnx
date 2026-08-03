@@ -10,7 +10,7 @@ type BoxBounds = { left: number; top: number; right: number; bottom: number };
 type CropResizeHandle = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 type DecodedImage = { source: CanvasImageSource; width: number; height: number; release: () => void };
 type OcrPass = { label: string; url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean };
-type RawScan = { label: string; lines: string[] };
+type RawScan = { label: string; lines: Array<{ text: string; confidence: number }> };
 const DEFAULT_CROP: CropRect = { x: 0, y: 0, width: 1, height: 1 };
 
 interface ContainerField {
@@ -286,26 +286,33 @@ export class App {
       const ocr = await this.getOcr();
       this.status.set(this.processingMode() === 'guided-crop' ? 'Preparing enlarged marking crops...' : 'Detecting painted text regions...');
       const passes = await this.createOcrPasses(image, imageUrl);
-      const scanResults = await Promise.all(passes.map(async (pass) => {
+      const scanResults: OcrLine[][] = [];
+      this.rawText.set([]);
+      this.rawScans.set([]);
+      for (const [index, pass] of passes.entries()) {
+        this.status.set(`Scanning ${pass.label} (${index + 1} of ${passes.length})...`);
         try {
           const detected = await ocr.detect(pass.url);
-          return detected.map((line) => ({
+          const scan = detected.map((line) => ({
             ...line,
             box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
           }));
+          scanResults.push(scan);
+          const lines = this.deduplicateLines(scanResults.flat());
+          this.rawText.set(lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`));
+          this.rawScans.update((scans) => [...scans, {
+            label: pass.label,
+            lines: scan.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
+          }]);
         } finally {
           if (pass.revokeUrl) {
             URL.revokeObjectURL(pass.url);
           }
         }
-      }));
+      }
       const lines = this.deduplicateLines(scanResults.flat());
       const rawText = lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`);
       this.rawText.set(rawText);
-      this.rawScans.set(scanResults.map((scan, index) => ({
-        label: passes[index].label,
-        lines: scan.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`),
-      })));
       const fields = this.extractFields(lines);
       this.fields.set(fields);
       let suggestedCrop: CropRect | null = null;

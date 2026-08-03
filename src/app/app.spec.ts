@@ -47,12 +47,12 @@ describe('App', () => {
     const app = fixture.componentInstance as unknown as {
       fields: { set(value: Record<string, { value: string }>): void; (): Record<string, { value: string }> };
       rawText: { set(value: string[]): void; (): string[] };
-      rawScans: { set(value: Array<{ label: string; lines: string[] }>): void; (): Array<{ label: string; lines: string[] }> };
+      rawScans: { set(value: Array<{ label: string; lines: Array<{ text: string; confidence: number }> }>): void; (): Array<{ label: string; lines: Array<{ text: string; confidence: number }> }> };
       openFilePicker(): void;
     };
     app.fields.set({ containerId: { value: 'HCSU7997909' } });
     app.rawText.set(['HCSU 799790 9 (98%)']);
-    app.rawScans.set([{ label: 'Full photo', lines: ['HCSU 799790 9 (98%)'] }]);
+    app.rawScans.set([{ label: 'Full photo', lines: [{ text: 'HCSU 799790 9', confidence: 98 }] }]);
 
     app.openFilePicker();
 
@@ -64,18 +64,20 @@ describe('App', () => {
   it('should render raw text grouped by OCR scan', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
-      rawScans: { set(value: Array<{ label: string; lines: string[] }>): void };
+      rawScans: { set(value: Array<{ label: string; lines: Array<{ text: string; confidence: number }> }>): void };
     };
     app.rawScans.set([
-      { label: 'Full photo', lines: ['HCSU 799790 9 (98%)'] },
-      { label: 'Enhanced region 1', lines: ['TARE 3,650 KG (94%)'] },
+      { label: 'Full photo', lines: [{ text: 'HCSU 799790 9', confidence: 98 }] },
+      { label: 'Enhanced region 1', lines: [{ text: 'TARE 3,650 KG', confidence: 94 }] },
     ]);
     fixture.detectChanges();
 
     const panel = (fixture.nativeElement as HTMLElement).querySelector('.raw-text')!;
     expect(panel.textContent).toContain('Full photo');
     expect(panel.textContent).toContain('Enhanced region 1');
-    expect(panel.querySelectorAll('li')).toHaveLength(2);
+    expect(panel.querySelectorAll('tbody tr')).toHaveLength(2);
+    expect(panel.textContent).toContain('98%');
+    expect(panel.textContent).not.toContain('(98%)');
   });
 
   it('should process the selected crop only after it is prepared', async () => {
