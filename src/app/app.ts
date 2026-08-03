@@ -581,8 +581,9 @@ export class App {
   }
 
   private suggestedMarkingBounds(lines: OcrLine[], containerId: string): BoxBounds | null {
-    if (!containerId) return null;
-    const idLines = this.linesForContainerId(lines, containerId);
+    const cropAnchor = containerId || this.findContainerIdAnchor(lines);
+    if (!cropAnchor) return null;
+    const idLines = this.linesForContainerId(lines, cropAnchor);
     const idBounds = this.combineBounds(idLines.map((line) => this.boxBounds(line.box)).filter((bounds): bounds is BoxBounds => Boolean(bounds)));
     if (!idBounds) return null;
 
@@ -596,6 +597,26 @@ export class App {
         && bounds.right >= idBounds.left - horizontalAllowance
         && bounds.left <= idBounds.right + horizontalAllowance);
     return this.combineBounds([idBounds, ...relevantBounds]);
+  }
+
+  private findContainerIdAnchor(lines: OcrLine[]): string {
+    const fragments = lines
+      .map((line, index) => ({
+        line,
+        index,
+        text: line.text.replace(/[^A-Z0-9]/gi, '').toUpperCase(),
+        bounds: this.boxBounds(line.box),
+      }))
+      .filter((fragment) => fragment.text && fragment.bounds)
+      .sort((first, second) => first.bounds!.top - second.bounds!.top || first.bounds!.left - second.bounds!.left);
+    for (let start = 0; start < fragments.length; start++) {
+      for (let length = 1; length <= 3 && start + length <= fragments.length; length++) {
+        const candidate = fragments.slice(start, start + length).map((fragment) => fragment.text).join('');
+        const anchor = candidate.match(/[A-Z]{3}[UJZ]\d{6}/)?.[0];
+        if (anchor) return anchor;
+      }
+    }
+    return '';
   }
 
   private linesForContainerId(lines: OcrLine[], containerId: string): OcrLine[] {
@@ -758,7 +779,10 @@ export class App {
     const find = (pattern: RegExp) => text.find((line) => pattern.test(line.normalized));
     const idLine = find(/[A-Z]{3}[UJZ][\s-]*\d{6}[\s-]*\d/);
     if (idLine) {
-      fields.containerId = { value: idLine.normalized.match(/[A-Z]{3}[UJZ][\s-]*\d{6}[\s-]*\d/)![0].replace(/[\s-]/g, ''), confidence: idLine.mean };
+      const value = idLine.normalized.match(/[A-Z]{3}[UJZ][\s-]*\d{6}[\s-]*\d/)![0].replace(/[\s-]/g, '');
+      if (this.validateContainerId(value)) {
+        fields.containerId = { value, confidence: idLine.mean };
+      }
     } else {
       const idFragments = text
         .map((line, index) => ({
@@ -842,18 +866,18 @@ export class App {
       return undefined;
     };
     const capacityAfter = (label: RegExp, unit: RegExp) => {
-      // Later OCR passes append their lines after earlier passes and usually have a clearer crop.
-      for (let labelIndex = text.length - 1; labelIndex >= 0; labelIndex--) {
+      const candidates: Array<{ value: string; confidence: number }> = [];
+      for (let labelIndex = 0; labelIndex < text.length; labelIndex++) {
         if (!label.test(text[labelIndex].normalized)) continue;
         const nearby = text.slice(labelIndex, labelIndex + 4);
         for (const line of nearby) {
           const match = line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unit.source}`));
           if (match) {
-            return { value: match[1].trim(), confidence: line.mean };
+            candidates.push({ value: match[1].trim(), confidence: line.mean });
           }
         }
       }
-      return undefined;
+      return candidates.sort((first, second) => second.confidence - first.confidence)[0];
     };
     const mpgmKg = weightAfter(/\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT|\bMAX\.?\s*GR\.?/, 'KG');
     const mpgmLb = weightAfter(/\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT|\bMAX\.?\s*GR\.?/, 'LB');

@@ -260,7 +260,7 @@ describe('App', () => {
     expect(fields['capacityLiters'].value).toBe('25.000');
   });
 
-  it('should prefer the capacity from a later OCR pass', () => {
+  it('should prefer the highest-confidence capacity', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
@@ -271,7 +271,7 @@ describe('App', () => {
       { text: 'CAPACITY 25,000 L', mean: 0.91 },
     ]);
 
-    expect(fields['capacityLiters'].value).toBe('25,000');
+    expect(fields['capacityLiters'].value).toBe('25,800');
   });
 
   it('should recognize common OCR variants of payload and capacity labels', () => {
@@ -422,6 +422,43 @@ describe('App', () => {
     const bounds = app.suggestedMarkingBounds(lines, 'HCSU7997909');
 
     expect(bounds).toEqual({ left: 380, top: 100, right: 620, bottom: 210 });
+  });
+
+  it('should propose a crop from an ID stem when the check digit is missing', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      suggestedMarkingBounds(lines: Array<{ text: string; mean: number; box?: number[][] }>, containerId: string): { left: number; top: number; right: number; bottom: number } | null;
+    };
+    const lines = [
+      { text: 'HCSU 799790', mean: 0.92, box: [[400, 100], [560, 100], [560, 125], [400, 125]] },
+      { text: 'MAX.GR. 30,480 KG', mean: 0.95, box: [[380, 150], [620, 150], [620, 175], [380, 175]] },
+      { text: 'TARE 3,780 KG', mean: 0.95, box: [[380, 185], [580, 185], [580, 210], [380, 210]] },
+    ];
+
+    expect(app.suggestedMarkingBounds(lines, '')).toEqual({ left: 380, top: 100, right: 620, bottom: 210 });
+  });
+
+  it('should propose a crop from an ID stem split across OCR regions', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      suggestedMarkingBounds(lines: Array<{ text: string; mean: number; box?: number[][] }>, containerId: string): { left: number; top: number; right: number; bottom: number } | null;
+    };
+    const lines = [
+      { text: 'HCSU', mean: 0.92, box: [[400, 100], [445, 100], [445, 125], [400, 125]] },
+      { text: '799790', mean: 0.9, box: [[450, 100], [560, 100], [560, 125], [450, 125]] },
+      { text: 'MAX.GR. 30,480 KG', mean: 0.95, box: [[380, 150], [620, 150], [620, 175], [380, 175]] },
+    ];
+
+    expect(app.suggestedMarkingBounds(lines, '')).toEqual({ left: 380, top: 100, right: 620, bottom: 175 });
+  });
+
+  it('should not populate an ID with an invalid check digit', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
+    };
+
+    expect(app.extractFields([{ text: 'HCSU 799790 8', mean: 0.95 }])['containerId'].value).toBe('');
   });
 
   it('should replace the full-image draft with an ID-focused crop after initial detection', async () => {
