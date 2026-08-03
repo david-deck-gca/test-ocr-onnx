@@ -19,7 +19,6 @@
       } @else if (previewUrl(); as url) {
         @if (cropEditorOpen()) {
           <section class="crop-editor" aria-labelledby="crop-editor-title">
-            <div><h3 id="crop-editor-title">{{ automaticCropSuggested() ? 'Review suggested marking region' : 'Select a marking region' }}</h3><p>{{ automaticCropSuggested() ? 'OCR located the container ID and text beneath it. Adjust the rectangle if needed before using it.' : 'Drag a rectangle around the container ID or markings you want to read.' }}</p></div>
             <div class="crop-canvas" (pointerdown)="startCrop($event)" (pointermove)="updateCrop($event)" (pointerup)="finishCrop($event)" (pointercancel)="finishCrop($event)">
               <img [src]="url" alt="Container image being cropped" draggable="false" />
               <div class="crop-selection" [style.left.%]="cropDraft().x * 100" [style.top.%]="cropDraft().y * 100" [style.width.%]="cropDraft().width * 100" [style.height.%]="cropDraft().height * 100">
@@ -28,7 +27,7 @@
                 }
               </div>
             </div>
-            <div class="crop-actions"><button class="secondary" type="button" [disabled]="applyingCrop() || processing()" (click)="closeCropEditor()">Cancel</button><button class="primary" type="button" [disabled]="applyingCrop() || processing()" (click)="applyCrop()">{{ applyingCrop() ? 'Preparing selected region...' : 'Use selected region' }}</button></div>
+            <div class="crop-actions"><button class="secondary" type="button" [disabled]="applyingCrop() || processing()" (click)="closeCropEditor()">Cancel</button><button class="primary run-button" type="button" [disabled]="applyingCrop() || processing()" (click)="applyCropAndProcess()">Use selected region</button></div>
           </section>
         } @else {
           <figure class="image-preview"><img [src]="url" alt="Selected container" /><figcaption>{{ sourceName() }}</figcaption></figure>
@@ -44,15 +43,9 @@
       }
     </section>
 
-    <section class="workflow-panel" aria-label="OCR processing">
-      <button class="primary run-button" type="button" [disabled]="!hasImage() || processing() || cropEditorOpen()" (click)="processImage()">{{ processing() ? 'Processing locally...' : 'Run local OCR' }}</button>
-      <p class="helper">No image data is uploaded. Crop selection is the default; the selected region is scanned at the image's original resolution.</p>
-    </section>
-  </section>
-
-  <section class="results" aria-label="Structured container data">
+    <section class="results" aria-label="Structured container data">
     <div class="result-actions"><button class="secondary" type="button" [disabled]="!hasImage()" (click)="saveJsonToIndexedDb()">Save</button></div>
-    <div class="field-grid">
+      <div class="field-grid">
       <label class="wide container-id">Container ID<input [value]="fields().containerId.value" (input)="updateField('containerId', $any($event.target).value)" autocapitalize="characters" />@if (fields().containerId.value) { <small aria-live="polite" [class.valid]="containerIdValid()" [class.invalid]="!containerIdValid()">{{ containerIdValid() ? 'ISO 6346 check digit valid' : 'Check the ID or check digit' }}</small> }</label>
       <label>ISO CODE<input [value]="fields().isoCode.value" (input)="updateField('isoCode', $any($event.target).value)" autocapitalize="characters" /></label>
       <div class="weight-row">
@@ -71,6 +64,7 @@
         <label>CU.CAP.<input [value]="fields().capacityCubicFeet.value" (input)="updateField('capacityCubicFeet', $any($event.target).value)" /><span>CU.FT.</span></label>
       </div>
     </div>
-    <div class="raw-text"><h3>Raw detected text</h3>@if (rawText().length) { <ul>@for (line of rawText(); track line) { <li>{{ line }}</li> }</ul> } @else { <p>Detected lines will be retained here with the exported record.</p> }</div>
+    <div class="raw-text"><h3>Raw detected text</h3>@if (rawScans().length) { @for (scan of rawScans(); track scan.label) { <section><strong>{{ scan.label }}</strong>@if (scan.lines.length) { <ul>@for (line of scan.lines; track line) { <li>{{ line }}</li> }</ul> } @else { <p>No text detected.</p> }</section> } } @else { <p>Detected lines will be retained here with the exported record.</p> }</div>
+  </section>
   </section>
 </main>

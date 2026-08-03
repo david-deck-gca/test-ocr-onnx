@@ -47,15 +47,51 @@ describe('App', () => {
     const app = fixture.componentInstance as unknown as {
       fields: { set(value: Record<string, { value: string }>): void; (): Record<string, { value: string }> };
       rawText: { set(value: string[]): void; (): string[] };
+      rawScans: { set(value: Array<{ label: string; lines: string[] }>): void; (): Array<{ label: string; lines: string[] }> };
       openFilePicker(): void;
     };
     app.fields.set({ containerId: { value: 'HCSU7997909' } });
     app.rawText.set(['HCSU 799790 9 (98%)']);
+    app.rawScans.set([{ label: 'Full photo', lines: ['HCSU 799790 9 (98%)'] }]);
 
     app.openFilePicker();
 
     expect(app.fields()['containerId'].value).toBe('');
     expect(app.rawText()).toEqual([]);
+    expect(app.rawScans()).toEqual([]);
+  });
+
+  it('should render raw text grouped by OCR scan', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      rawScans: { set(value: Array<{ label: string; lines: string[] }>): void };
+    };
+    app.rawScans.set([
+      { label: 'Full photo', lines: ['HCSU 799790 9 (98%)'] },
+      { label: 'Enhanced region 1', lines: ['TARE 3,650 KG (94%)'] },
+    ]);
+    fixture.detectChanges();
+
+    const panel = (fixture.nativeElement as HTMLElement).querySelector('.raw-text')!;
+    expect(panel.textContent).toContain('Full photo');
+    expect(panel.textContent).toContain('Enhanced region 1');
+    expect(panel.querySelectorAll('li')).toHaveLength(2);
+  });
+
+  it('should process the selected crop only after it is prepared', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      applyCrop(): Promise<boolean>;
+      processImage(): Promise<void>;
+      applyCropAndProcess(): Promise<void>;
+    };
+    app.applyCrop = vi.fn().mockResolvedValue(true);
+    app.processImage = vi.fn().mockResolvedValue(undefined);
+
+    await app.applyCropAndProcess();
+
+    expect(app.applyCrop).toHaveBeenCalled();
+    expect(app.processImage).toHaveBeenCalled();
   });
 
   it('should attach the camera stream after the video preview is rendered', async () => {
@@ -207,6 +243,19 @@ describe('App', () => {
     ]);
 
     expect(fields['payloadKg'].value).toBe('32350');
+  });
+
+  it('should preserve all detected capacity digits', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'CAPACITY 25.000L', mean: 0.99 },
+    ]);
+
+    expect(fields['capacityLiters'].value).toBe('25.000');
   });
 
   it('should recognize common OCR variants of payload and capacity labels', () => {
