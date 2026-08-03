@@ -44,7 +44,6 @@
     </section>
 
     <section class="results" aria-label="Structured container data">
-    <div class="result-actions"><button class="secondary" type="button" [disabled]="!hasImage()" (click)="saveJsonToIndexedDb()">Save</button></div>
       <div class="field-grid">
       <label class="wide container-id">Container ID<input [value]="fields().containerId.value" (input)="updateField('containerId', $any($event.target).value)" autocapitalize="characters" />@if (fields().containerId.value) { <small aria-live="polite" [class.valid]="containerIdValid()" [class.invalid]="!containerIdValid()">{{ containerIdValid() ? 'ISO 6346 check digit valid' : 'Check the ID or check digit' }}</small> }</label>
       <label>ISO CODE<input [value]="fields().isoCode.value" (input)="updateField('isoCode', $any($event.target).value)" autocapitalize="characters" /></label>
@@ -63,7 +62,8 @@
         <label>CU.CAP.<input [value]="fields().capacityCubicMeters.value" (input)="updateField('capacityCubicMeters', $any($event.target).value)" /><span>CU.M.</span></label>
         <label>CU.CAP.<input [value]="fields().capacityCubicFeet.value" (input)="updateField('capacityCubicFeet', $any($event.target).value)" /><span>CU.FT.</span></label>
       </div>
-    </div>
+      </div>
+      <div class="result-actions"><button class="secondary" type="button" [disabled]="!hasImage()" (click)="saveJsonToIndexedDb()">Save</button></div>
     <div class="raw-text"><h3>Raw detected text</h3>@if (rawScans().length) { <div class="raw-scans">@for (scan of rawScans(); track scan.label) { <section><strong>{{ scan.label }}</strong>@if (scan.lines.length) { <table [attr.aria-label]="'Detected text for ' + scan.label"><thead><tr><th>Text</th><th>Confidence</th></tr></thead><tbody>@for (line of scan.lines; track line.text) { <tr><td>{{ line.text }}</td><td>{{ line.confidence }}%</td></tr> }</tbody></table> } @else { <p>No text detected.</p> }</section> }</div> } @else { <p>Detected lines will be retained here with the exported record.</p> }</div>
   </section>
   </section>
