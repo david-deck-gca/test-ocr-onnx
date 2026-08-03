@@ -45,10 +45,6 @@
     </section>
 
     <section class="workflow-panel" aria-label="OCR processing">
-      <div class="mode-options" role="radiogroup" aria-label="Processing mode">
-        <button type="button" [class.selected]="processingMode() === 'full-photo'" (click)="setMode('full-photo')" role="radio" [attr.aria-checked]="processingMode() === 'full-photo'"><strong>Quick scan</strong><span>Faster but less accurate</span></button>
-        <button type="button" [class.selected]="processingMode() === 'guided-crop'" (click)="setMode('guided-crop')" role="radio" [attr.aria-checked]="processingMode() === 'guided-crop'"><strong>Enhanced scan</strong><span>Slower but more accurate</span></button>
-      </div>
       <button class="primary run-button" type="button" [disabled]="!hasImage() || processing() || cropEditorOpen()" (click)="processImage()">{{ processing() ? 'Processing locally...' : 'Run local OCR' }}</button>
       <p class="helper">No image data is uploaded. Crop selection is the default; the selected region is scanned at the image's original resolution.</p>
     </section>
