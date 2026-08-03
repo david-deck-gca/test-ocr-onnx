@@ -42,6 +42,41 @@ describe('App', () => {
     expect(app.processingMode()).toBe('full-photo');
   });
 
+  it('should default to auto crop and render both capture mode choices', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      captureMode: () => string;
+    };
+    fixture.detectChanges();
+
+    const radios = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLInputElement>('input[name="capture-mode"]'));
+
+    expect(app.captureMode()).toBe('auto-crop');
+    expect(radios.map((radio) => radio.value)).toEqual(['auto-crop', 'manual-crop']);
+    expect(radios[0].checked).toBe(true);
+  });
+
+  it('should not start automatic OCR when a manual-crop image is selected', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      captureMode: { set(value: string): void };
+      prepareInitialCrop: ReturnType<typeof vi.fn>;
+      useImage(image: Blob, name: string): void;
+    };
+    const createObjectUrl = vi.fn().mockReturnValue('blob:manual-crop');
+    vi.stubGlobal('URL', { createObjectURL: createObjectUrl, revokeObjectURL: vi.fn() });
+    app.captureMode.set('manual-crop');
+    app.prepareInitialCrop = vi.fn();
+
+    try {
+      app.useImage(new Blob(['image'], { type: 'image/jpeg' }), 'container.jpg');
+
+      expect(app.prepareInitialCrop).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('should clear OCR fields when choosing a new image', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {

@@ -3,6 +3,7 @@ import Ocr from '@gutenye/ocr-browser';
 import * as ort from 'onnxruntime-web';
 
 type ProcessingMode = 'full-photo' | 'guided-crop';
+type CaptureMode = 'auto-crop' | 'manual-crop';
 type FieldKey = 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters' | 'capacityCubicMeters' | 'capacityCubicFeet';
 type OcrLine = { text: string; mean: number; box?: number[][] };
 type CropRect = { x: number; y: number; width: number; height: number };
@@ -45,6 +46,7 @@ export class App {
   protected readonly applyingCrop = signal(false);
   protected readonly automaticCropSuggested = signal(false);
   protected readonly cropResizeHandles: CropResizeHandle[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+  protected readonly captureMode = signal<CaptureMode>('auto-crop');
   protected readonly processingMode = signal<ProcessingMode>('full-photo');
   protected readonly cameraOpen = signal(false);
   protected readonly processing = signal(false);
@@ -256,6 +258,10 @@ export class App {
     this.processingMode.set(mode);
   }
 
+  protected setCaptureMode(mode: CaptureMode): void {
+    this.captureMode.set(mode);
+  }
+
   protected updateField(key: FieldKey, value: string): void {
     this.fields.update((fields) => {
       const updated = {
@@ -392,6 +398,10 @@ export class App {
     this.cropPreviewUrl.set(null);
     this.rawText.set([]);
     this.rawScans.set([]);
+    if (this.captureMode() === 'manual-crop') {
+      this.status.set('Draw a crop around the ID and markings, then use the selected region to run OCR.');
+      return;
+    }
     const selection = ++this.imageSelection;
     void this.prepareInitialCrop(image, this.previewUrl()!, selection);
   }
