@@ -583,6 +583,7 @@ export class App {
   private suggestedMarkingBounds(lines: OcrLine[], containerId: string): BoxBounds | null {
     const cropAnchor = containerId || this.findContainerIdAnchor(lines);
     if (!cropAnchor) return null;
+    const isIncompleteIdAnchor = !containerId;
     const idLines = this.linesForContainerId(lines, cropAnchor);
     const idBounds = this.combineBounds(idLines.map((line) => this.boxBounds(line.box)).filter((bounds): bounds is BoxBounds => Boolean(bounds)));
     if (!idBounds) return null;
@@ -596,7 +597,9 @@ export class App {
       .filter((bounds) => bounds.bottom >= idBounds.top - idHeight
         && bounds.right >= idBounds.left - horizontalAllowance
         && bounds.left <= idBounds.right + horizontalAllowance);
-    return this.combineBounds([idBounds, ...relevantBounds]);
+    const markingsBounds = this.combineBounds([idBounds, ...relevantBounds]);
+    if (!markingsBounds || !isIncompleteIdAnchor) return markingsBounds;
+    return { ...markingsBounds, right: markingsBounds.right + idWidth / 10 };
   }
 
   private findContainerIdAnchor(lines: OcrLine[]): string {

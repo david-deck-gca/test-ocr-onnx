@@ -435,7 +435,7 @@ describe('App', () => {
       { text: 'TARE 3,780 KG', mean: 0.95, box: [[380, 185], [580, 185], [580, 210], [380, 210]] },
     ];
 
-    expect(app.suggestedMarkingBounds(lines, '')).toEqual({ left: 380, top: 100, right: 620, bottom: 210 });
+    expect(app.suggestedMarkingBounds(lines, '')).toEqual({ left: 380, top: 100, right: 636, bottom: 210 });
   });
 
   it('should propose a crop from an ID stem split across OCR regions', () => {
@@ -449,7 +449,7 @@ describe('App', () => {
       { text: 'MAX.GR. 30,480 KG', mean: 0.95, box: [[380, 150], [620, 150], [620, 175], [380, 175]] },
     ];
 
-    expect(app.suggestedMarkingBounds(lines, '')).toEqual({ left: 380, top: 100, right: 620, bottom: 175 });
+    expect(app.suggestedMarkingBounds(lines, '')).toEqual({ left: 380, top: 100, right: 636, bottom: 175 });
   });
 
   it('should not populate an ID with an invalid check digit', () => {
