@@ -258,6 +258,20 @@ describe('App', () => {
     expect(fields['capacityLiters'].value).toBe('25.000');
   });
 
+  it('should prefer the capacity from a later OCR pass', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'CAPACITY 25,800 L', mean: 0.98 },
+      { text: 'CAPACITY 25,000 L', mean: 0.91 },
+    ]);
+
+    expect(fields['capacityLiters'].value).toBe('25,000');
+  });
+
   it('should recognize common OCR variants of payload and capacity labels', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {

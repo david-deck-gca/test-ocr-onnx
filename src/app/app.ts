@@ -835,13 +835,15 @@ export class App {
       return undefined;
     };
     const capacityAfter = (label: RegExp, unit: RegExp) => {
-      const labelIndex = text.findIndex((line) => label.test(line.normalized));
-      if (labelIndex < 0) return undefined;
-      const nearby = text.slice(labelIndex, labelIndex + 4);
-      for (const line of nearby) {
-        const match = line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unit.source}`));
-        if (match) {
-          return { value: match[1].trim(), confidence: line.mean };
+      // Later OCR passes append their lines after earlier passes and usually have a clearer crop.
+      for (let labelIndex = text.length - 1; labelIndex >= 0; labelIndex--) {
+        if (!label.test(text[labelIndex].normalized)) continue;
+        const nearby = text.slice(labelIndex, labelIndex + 4);
+        for (const line of nearby) {
+          const match = line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unit.source}`));
+          if (match) {
+            return { value: match[1].trim(), confidence: line.mean };
+          }
         }
       }
       return undefined;
