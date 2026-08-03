@@ -172,21 +172,25 @@ describe('App', () => {
     expect(app.diagnostics().some((diagnostic) => diagnostic.stage === 'Manual crop' && diagnostic.message === 'The selected region could not be prepared. Adjust the rectangle or choose the image again.')).toBe(true);
   });
 
-  it('should fall back to an image element when bitmap decoding fails', async () => {
+  it('should use a loaded image element when bitmap and image decode fail', async () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       decodeImage(image: Blob): Promise<{ width: number; height: number; release(): void }>;
     };
     const createObjectUrl = vi.fn().mockReturnValue('blob:fallback-image');
     const revokeObjectUrl = vi.fn();
-    const decode = vi.fn().mockResolvedValue(undefined);
+    const decode = vi.fn().mockRejectedValue(new Error('Image.decode is unsupported'));
 
     vi.stubGlobal('createImageBitmap', vi.fn().mockRejectedValue(new Error('WebP bitmap decoding failed')));
     vi.stubGlobal('URL', { createObjectURL: createObjectUrl, revokeObjectURL: revokeObjectUrl });
     vi.stubGlobal('Image', class {
       naturalWidth = 768;
       naturalHeight = 768;
-      src = '';
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.());
+      }
       decode = decode;
     });
 
@@ -201,6 +205,16 @@ describe('App', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('should cap manual crop output dimensions by pixel budget', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      cropOutputScale(sourceWidth: number, sourceHeight: number, requestedScale: number, maximumWidth?: number, maximumPixels?: number): number;
+    };
+
+    expect(app.cropOutputScale(4_000, 3_000, 1, undefined, 8_000_000)).toBeCloseTo(Math.sqrt(2 / 3));
+    expect(app.cropOutputScale(2_000, 1_000, 2, undefined, 8_000_000)).toBe(2);
   });
 
   it('should extract tank container weights without inventing a payload', () => {

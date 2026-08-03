@@ -12,6 +12,7 @@ type DecodedImage = { source: CanvasImageSource; width: number; height: number; 
 type OcrPass = { label: string; url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean };
 type RawScan = { label: string; lines: Array<{ text: string; confidence: number }> };
 const DEFAULT_CROP: CropRect = { x: 0, y: 0, width: 1, height: 1 };
+const MAX_MANUAL_CROP_PIXELS = 8_000_000;
 
 interface ContainerField {
   value: string;
@@ -469,8 +470,8 @@ export class App {
     const manualCrop = this.cropRect();
     if (manualCrop) {
       return [
-        { label: 'Selected region', ...await this.createCropPass(image, manualCrop, 1) },
-        { label: 'Selected region (2x)', ...await this.createCropPass(image, manualCrop, 2) },
+        { label: 'Selected region', ...await this.createCropPass(image, manualCrop, 1, undefined, MAX_MANUAL_CROP_PIXELS) },
+        { label: 'Selected region (2x)', ...await this.createCropPass(image, manualCrop, 2, undefined, MAX_MANUAL_CROP_PIXELS) },
       ];
     }
     if (this.processingMode() === 'full-photo') {
@@ -661,14 +662,14 @@ export class App {
     };
   }
 
-  private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumWidth?: number): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }> {
+  private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }> {
     const decodedImage = await this.decodeImage(image);
     try {
       const sourceX = Math.round(crop.x * decodedImage.width);
       const sourceY = Math.round(crop.y * decodedImage.height);
       const sourceWidth = Math.max(1, Math.round(crop.width * decodedImage.width));
       const sourceHeight = Math.max(1, Math.round(crop.height * decodedImage.height));
-      const outputScale = maximumWidth ? Math.min(1, maximumWidth / sourceWidth) : scale;
+      const outputScale = this.cropOutputScale(sourceWidth, sourceHeight, scale, maximumWidth, maximumPixels);
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(sourceWidth * outputScale));
       canvas.height = Math.max(1, Math.round(sourceHeight * outputScale));
@@ -685,16 +686,35 @@ export class App {
     }
   }
 
+  private cropOutputScale(sourceWidth: number, sourceHeight: number, requestedScale: number, maximumWidth?: number, maximumPixels?: number): number {
+    const widthScale = maximumWidth ? maximumWidth / sourceWidth : Number.POSITIVE_INFINITY;
+    const pixelScale = maximumPixels ? Math.sqrt(maximumPixels / (sourceWidth * sourceHeight)) : Number.POSITIVE_INFINITY;
+    return Math.min(requestedScale, widthScale, pixelScale);
+  }
+
   private async decodeImage(image: Blob): Promise<DecodedImage> {
+    let bitmapError: unknown;
     try {
       const bitmap = await createImageBitmap(image);
       return { source: bitmap, width: bitmap.width, height: bitmap.height, release: () => bitmap.close() };
-    } catch {
+    } catch (error: unknown) {
+      bitmapError = error;
       const url = URL.createObjectURL(image);
       const element = new Image();
       try {
+        const loaded = new Promise<void>((resolve, reject) => {
+          element.onload = () => resolve();
+          element.onerror = () => reject(new Error('The browser image element reported a load failure.'));
+        });
         element.src = url;
-        await element.decode();
+        await loaded;
+        // Some mobile browsers display an image successfully but reject decode().
+        // A load event with dimensions is sufficient for Canvas rendering.
+        try {
+          await element.decode();
+        } catch {
+          // Use the successfully loaded image element as the Canvas source.
+        }
         if (!element.naturalWidth || !element.naturalHeight) {
           throw new Error('The source image has no decodable dimensions.');
         }
@@ -706,7 +726,13 @@ export class App {
         };
       } catch (error: unknown) {
         URL.revokeObjectURL(url);
-        throw error;
+        const details = [
+          `type=${image.type || 'unknown'}`,
+          `size=${Math.round(image.size / 1024)}KiB`,
+          `ImageBitmap=${this.errorMessage(bitmapError)}`,
+          `HTMLImage=${this.errorMessage(error)}`,
+        ].join(', ');
+        throw new Error(`Unable to decode the source image (${details}).`);
       }
     }
   }

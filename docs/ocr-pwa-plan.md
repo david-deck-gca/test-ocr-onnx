@@ -43,3 +43,4 @@ The image picker accepts `image/*`, so it supports formats the user's browser ca
 4. Add curved-text unwarping after measuring failure cases on representative container photos.
 5. Add a sample-image evaluation set and field-level accuracy benchmark.
 6. Add model-version switching and offline cache status management.
+7. Refine mobile crop memory management: retain a per-pass pixel budget, apply a lower budget to the 2x retry, and report any downscaling factor in OCR diagnostics.
