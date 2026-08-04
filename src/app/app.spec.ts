@@ -248,8 +248,31 @@ describe('App', () => {
       cropOutputScale(sourceWidth: number, sourceHeight: number, requestedScale: number, maximumWidth?: number, maximumPixels?: number): number;
     };
 
-    expect(app.cropOutputScale(4_000, 3_000, 1, undefined, 8_000_000)).toBeCloseTo(Math.sqrt(2 / 3));
-    expect(app.cropOutputScale(2_000, 1_000, 2, undefined, 8_000_000)).toBe(2);
+    expect(app.cropOutputScale(4_000, 3_000, 1, undefined, 4_000_000)).toBeCloseTo(Math.sqrt(1 / 3));
+    expect(app.cropOutputScale(2_000, 1_000, 2, undefined, 4_000_000)).toBeCloseTo(Math.sqrt(2));
+  });
+
+  it('should release every temporary OCR pass when pass preparation fails', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      releaseOcrPasses(passes: Array<{ url: string; revokeUrl: boolean }>): void;
+    };
+    const revokeObjectUrl = vi.fn();
+    vi.stubGlobal('URL', { revokeObjectURL: revokeObjectUrl });
+
+    try {
+      app.releaseOcrPasses([
+        { url: 'blob:first', revokeUrl: true },
+        { url: 'blob:source', revokeUrl: false },
+        { url: 'blob:second', revokeUrl: true },
+      ]);
+
+      expect(revokeObjectUrl).toHaveBeenCalledTimes(2);
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:first');
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:second');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('should extract tank container weights without inventing a payload', () => {
@@ -517,17 +540,19 @@ describe('App', () => {
       cropDraft: () => { x: number; y: number; width: number; height: number };
       automaticCropSuggested: () => boolean;
       getOcr(): Promise<{ detect(url: string): Promise<Array<{ text: string; mean: number; box: number[][] }>> }>;
+      createCropPass(): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }>;
       createSuggestedCrop(lines: Array<{ text: string; mean: number; box: number[][] }>, containerId: string, image: Blob): Promise<{ x: number; y: number; width: number; height: number } | null>;
-      prepareInitialCrop(image: Blob, imageUrl: string, selection: number): Promise<void>;
+      prepareInitialCrop(image: Blob, selection: number): Promise<void>;
     };
     const focusedCrop = { x: 0.3, y: 0.2, width: 0.4, height: 0.35 };
     app.imageSelection = 1;
     app.getOcr = async () => ({
       detect: async () => [{ text: 'HCSU 799790 9', mean: 0.95, box: [[300, 100], [500, 100], [500, 130], [300, 130]] }],
     });
+    app.createCropPass = async () => ({ url: 'blob:full-photo', offsetX: 0, offsetY: 0, scale: 1, revokeUrl: true });
     app.createSuggestedCrop = async () => focusedCrop;
 
-    await app.prepareInitialCrop(new Blob(), 'blob:test', 1);
+    await app.prepareInitialCrop(new Blob(), 1);
 
     expect(app.cropDraft()).toEqual(focusedCrop);
     expect(app.automaticCropSuggested()).toBe(true);

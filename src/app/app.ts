@@ -13,7 +13,10 @@ type DecodedImage = { source: CanvasImageSource; width: number; height: number; 
 type OcrPass = { label: string; url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean };
 type RawScan = { label: string; lines: Array<{ text: string; confidence: number }> };
 const DEFAULT_CROP: CropRect = { x: 0, y: 0, width: 1, height: 1 };
-const MAX_MANUAL_CROP_PIXELS = 8_000_000;
+const MAX_FULL_PHOTO_PIXELS = 4_000_000;
+const MAX_MANUAL_CROP_PIXELS = 4_000_000;
+const MAX_MANUAL_RETRY_CROP_PIXELS = 2_000_000;
+const MAX_GUIDED_CROP_PIXELS = 2_000_000;
 
 interface ContainerField {
   value: string;
@@ -292,13 +295,13 @@ export class App {
       this.status.set('Loading local PaddleOCR models...');
       const ocr = await this.getOcr();
       this.status.set(this.processingMode() === 'guided-crop' ? 'Preparing enlarged marking crops...' : 'Detecting painted text regions...');
-      const passes = await this.createOcrPasses(image, imageUrl);
+      const passes = await this.createOcrPasses(image);
       const scanResults: OcrLine[][] = [];
       this.rawText.set([]);
       this.rawScans.set([]);
-      for (const [index, pass] of passes.entries()) {
-        this.status.set(`Scanning ${pass.label} (${index + 1} of ${passes.length})...`);
-        try {
+      try {
+        for (const [index, pass] of passes.entries()) {
+          this.status.set(`Scanning ${pass.label} (${index + 1} of ${passes.length})...`);
           const detected = await ocr.detect(pass.url);
           const scan = detected.map((line) => ({
             ...line,
@@ -311,7 +314,9 @@ export class App {
             label: pass.label,
             lines: scan.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
           }]);
-        } finally {
+        }
+      } finally {
+        for (const pass of passes) {
           if (pass.revokeUrl) {
             URL.revokeObjectURL(pass.url);
           }
@@ -398,12 +403,12 @@ export class App {
     this.cropPreviewUrl.set(null);
     this.rawText.set([]);
     this.rawScans.set([]);
+    const selection = ++this.imageSelection;
     if (this.captureMode() === 'manual-crop') {
       this.status.set('Draw a crop around the ID and markings, then use the selected region to run OCR.');
       return;
     }
-    const selection = ++this.imageSelection;
-    void this.prepareInitialCrop(image, this.previewUrl()!, selection);
+    void this.prepareInitialCrop(image, selection);
   }
 
   private clearFields(): void {
@@ -424,12 +429,21 @@ export class App {
     this.rawScans.set([]);
   }
 
-  private async prepareInitialCrop(image: Blob, imageUrl: string, selection: number): Promise<void> {
+  private async prepareInitialCrop(image: Blob, selection: number): Promise<void> {
     this.processing.set(true);
     this.status.set('Locating the container ID and markings in the full photo...');
     try {
       const ocr = await this.getOcr();
-      const lines = this.deduplicateLines(await ocr.detect(imageUrl));
+      const pass = await this.createCropPass(image, DEFAULT_CROP, 1, undefined, MAX_FULL_PHOTO_PIXELS);
+      let lines: OcrLine[];
+      try {
+        lines = this.deduplicateLines((await ocr.detect(pass.url)).map((line) => ({
+          ...line,
+          box: line.box?.map(([x, y]) => [x / pass.scale, y / pass.scale]),
+        })));
+      } finally {
+        URL.revokeObjectURL(pass.url);
+      }
       const containerId = this.extractFields(lines).containerId.value;
       const suggestedCrop = await this.createSuggestedCrop(lines, containerId, image);
       if (selection !== this.imageSelection || this.cropRect()) return;
@@ -456,7 +470,8 @@ export class App {
       return this.ocr;
     }
     ort.env.wasm.wasmPaths = new URL('ort/', document.baseURI).toString();
-    ort.env.wasm.numThreads = crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+    // One worker avoids allocating multiple large WASM heaps on memory-constrained mobile devices.
+    ort.env.wasm.numThreads = 1;
     this.ocr = await Ocr.create({
       models: {
         detectionPath: new URL('models/ch_PP-OCRv4_det_infer.onnx', document.baseURI).toString(),
@@ -476,36 +491,43 @@ export class App {
     return error instanceof Error ? error.message : String(error);
   }
 
-  private async createOcrPasses(image: Blob, imageUrl: string): Promise<OcrPass[]> {
+  private async createOcrPasses(image: Blob): Promise<OcrPass[]> {
     const manualCrop = this.cropRect();
     if (manualCrop) {
-      return [
-        { label: 'Selected region', ...await this.createCropPass(image, manualCrop, 1, undefined, MAX_MANUAL_CROP_PIXELS) },
-        { label: 'Selected region (2x)', ...await this.createCropPass(image, manualCrop, 2, undefined, MAX_MANUAL_CROP_PIXELS) },
-      ];
+      const passes: OcrPass[] = [];
+      try {
+        passes.push({ label: 'Selected region', ...await this.createCropPass(image, manualCrop, 1, undefined, MAX_MANUAL_CROP_PIXELS) });
+        passes.push({ label: 'Selected region (2x)', ...await this.createCropPass(image, manualCrop, 2, undefined, MAX_MANUAL_RETRY_CROP_PIXELS) });
+        return passes;
+      } catch (error: unknown) {
+        this.releaseOcrPasses(passes);
+        throw error;
+      }
     }
     if (this.processingMode() === 'full-photo') {
-      return [{ label: 'Full photo', url: imageUrl, offsetX: 0, offsetY: 0, scale: 1, revokeUrl: false }];
+      return [{ label: 'Full photo', ...await this.createCropPass(image, DEFAULT_CROP, 1, undefined, MAX_FULL_PHOTO_PIXELS) }];
     }
 
     const decodedImage = await this.decodeImage(image);
+    const enhancedPasses: OcrPass[] = [];
     try {
+      enhancedPasses.push({ label: 'Full photo', ...await this.createCropPass(image, DEFAULT_CROP, 1, undefined, MAX_FULL_PHOTO_PIXELS) });
       const overlap = 0.12;
-      const passes = [
+      const regions = [
         { x: 0, y: 0, width: 0.5 + overlap, height: 0.5 + overlap },
         { x: 0.5 - overlap, y: 0, width: 0.5 + overlap, height: 0.5 + overlap },
         { x: 0, y: 0.5 - overlap, width: 0.5 + overlap, height: 0.5 + overlap },
         { x: 0.5 - overlap, y: 0.5 - overlap, width: 0.5 + overlap, height: 0.5 + overlap },
       ];
-      const enhancedPasses = await Promise.all(passes.map(async (pass, index) => {
-        const sourceX = Math.round(pass.x * decodedImage.width);
-        const sourceY = Math.round(pass.y * decodedImage.height);
-        const sourceWidth = Math.min(decodedImage.width - sourceX, Math.round(pass.width * decodedImage.width));
-        const sourceHeight = Math.min(decodedImage.height - sourceY, Math.round(pass.height * decodedImage.height));
-        const scale = 2;
+      for (const [index, region] of regions.entries()) {
+        const sourceX = Math.round(region.x * decodedImage.width);
+        const sourceY = Math.round(region.y * decodedImage.height);
+        const sourceWidth = Math.min(decodedImage.width - sourceX, Math.round(region.width * decodedImage.width));
+        const sourceHeight = Math.min(decodedImage.height - sourceY, Math.round(region.height * decodedImage.height));
+        const scale = this.cropOutputScale(sourceWidth, sourceHeight, 2, undefined, MAX_GUIDED_CROP_PIXELS);
         const canvas = document.createElement('canvas');
-        canvas.width = sourceWidth * scale;
-        canvas.height = sourceHeight * scale;
+        canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+        canvas.height = Math.max(1, Math.round(sourceHeight * scale));
         const context = canvas.getContext('2d');
         if (!context) {
           throw new Error('Canvas 2D context is unavailable.');
@@ -516,12 +538,20 @@ export class App {
           if (blob) resolve(blob);
           else reject(new Error('Guided crop could not be created.'));
         }, 'image/png'));
-        return { label: `Enhanced region ${index + 1}`, url: URL.createObjectURL(crop), offsetX: sourceX, offsetY: sourceY, scale, revokeUrl: true };
-      }));
-      // Keep the native photo because rasterized crops can lose a small ISO check digit.
-      return [{ label: 'Full photo', url: imageUrl, offsetX: 0, offsetY: 0, scale: 1, revokeUrl: false }, ...enhancedPasses];
+        enhancedPasses.push({ label: `Enhanced region ${index + 1}`, url: URL.createObjectURL(crop), offsetX: sourceX, offsetY: sourceY, scale, revokeUrl: true });
+      }
+      return enhancedPasses;
+    } catch (error: unknown) {
+      this.releaseOcrPasses(enhancedPasses);
+      throw error;
     } finally {
       decodedImage.release();
+    }
+  }
+
+  private releaseOcrPasses(passes: OcrPass[]): void {
+    for (const pass of passes) {
+      if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
     }
   }
 
