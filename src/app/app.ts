@@ -17,6 +17,8 @@ const MAX_FULL_PHOTO_PIXELS = 4_000_000;
 const MAX_MANUAL_CROP_PIXELS = 4_000_000;
 const MAX_MANUAL_RETRY_CROP_PIXELS = 2_000_000;
 const MAX_GUIDED_CROP_PIXELS = 2_000_000;
+const MAX_PREVIEW_RETRIES = 2;
+const OCR_PASS_TIMEOUT_MS = 45_000;
 
 interface ContainerField {
   value: string;
@@ -89,6 +91,8 @@ export class App {
   private cropStart: { x: number; y: number } | null = null;
   private cropResize: { handle: CropResizeHandle; crop: CropRect } | null = null;
   private imageSelection = 0;
+  private previewRetries = 0;
+  private cropPreviewRetries = 0;
 
   protected openFilePicker(): void {
     this.clearFields();
@@ -178,6 +182,7 @@ export class App {
     this.status.set('Preparing the selected crop...');
     try {
       await this.updateCropPreview(crop);
+      this.cropPreviewRetries = 0;
       this.cropRect.set(crop);
       this.automaticCropSuggested.set(false);
       this.cropEditorOpen.set(false);
@@ -265,6 +270,44 @@ export class App {
     this.captureMode.set(mode);
   }
 
+  protected retryPreview(failedUrl: string): void {
+    const image = this.imageBlob();
+    if (!image || this.previewUrl() !== failedUrl) return;
+
+    if (this.previewRetries < MAX_PREVIEW_RETRIES) {
+      this.previewRetries++;
+      const nextUrl = URL.createObjectURL(image);
+      this.previewUrl.set(nextUrl);
+      URL.revokeObjectURL(failedUrl);
+      this.status.set(`Image preview failed to load. Retrying (${this.previewRetries} of ${MAX_PREVIEW_RETRIES})...`);
+      return;
+    }
+
+    this.previewUrl.set(null);
+    URL.revokeObjectURL(failedUrl);
+    this.addDiagnostic('Image preview', 'The selected image could not be displayed. Choose the image again.');
+  }
+
+  protected async retryCropPreview(failedUrl: string): Promise<void> {
+    const crop = this.cropRect();
+    if (!crop || this.cropPreviewUrl() !== failedUrl) return;
+
+    if (this.cropPreviewRetries < MAX_PREVIEW_RETRIES) {
+      this.cropPreviewRetries++;
+      this.status.set(`Selected crop preview failed to load. Retrying (${this.cropPreviewRetries} of ${MAX_PREVIEW_RETRIES})...`);
+      try {
+        await this.updateCropPreview(crop);
+        return;
+      } catch (error: unknown) {
+        if (this.cropPreviewUrl() !== failedUrl) return;
+        this.clearFailedCropPreview(failedUrl, this.errorMessage(error));
+        return;
+      }
+    }
+
+    this.clearFailedCropPreview(failedUrl);
+  }
+
   protected updateField(key: FieldKey, value: string): void {
     this.fields.update((fields) => {
       const updated = {
@@ -293,17 +336,17 @@ export class App {
     }
     try {
       this.status.set('Loading local PaddleOCR models...');
-      const ocr = await this.getOcr();
       this.status.set(this.processingMode() === 'guided-crop' ? 'Preparing enlarged marking crops...' : 'Detecting painted text regions...');
       const passes = await this.createOcrPasses(image);
       const scanResults: OcrLine[][] = [];
+      const recovery = { retried: false };
       this.rawText.set([]);
       this.rawScans.set([]);
       try {
         for (const [index, pass] of passes.entries()) {
           this.status.set(`Scanning ${pass.label} (${index + 1} of ${passes.length})...`);
           const startedAt = performance.now();
-          const detected = await ocr.detect(pass.url);
+          const detected = await this.detectWithRecovery(pass.url, recovery);
           const scan = detected.map((line) => ({
             ...line,
             box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
@@ -394,6 +437,7 @@ export class App {
     }
     this.imageBlob.set(image);
     this.previewUrl.set(URL.createObjectURL(image));
+    this.previewRetries = 0;
     this.sourceName.set(name);
     this.applyingCrop.set(false);
     this.automaticCropSuggested.set(false);
@@ -436,11 +480,10 @@ export class App {
     this.processing.set(true);
     this.status.set('Locating the container ID and markings in the full photo...');
     try {
-      const ocr = await this.getOcr();
       const pass = await this.createCropPass(image, DEFAULT_CROP, 1, undefined, MAX_FULL_PHOTO_PIXELS);
       let lines: OcrLine[];
       try {
-        lines = this.deduplicateLines((await ocr.detect(pass.url)).map((line) => ({
+        lines = this.deduplicateLines((await this.detectWithRecovery(pass.url, { retried: false })).map((line) => ({
           ...line,
           box: line.box?.map(([x, y]) => [x / pass.scale, y / pass.scale]),
         })));
@@ -484,6 +527,35 @@ export class App {
       },
     });
     return this.ocr;
+  }
+
+  private async detectWithRecovery(url: string, recovery: { retried: boolean }) {
+    try {
+      return await this.detectWithTimeout(url);
+    } catch (error: unknown) {
+      if (recovery.retried) throw error;
+      recovery.retried = true;
+      // The OCR package does not expose session disposal, but recreating its instance
+      // gives subsequent inference a fresh set of ONNX sessions.
+      this.ocr = null;
+      this.status.set('Local OCR stalled. Restarting local models and retrying once...');
+      return this.detectWithTimeout(url);
+    }
+  }
+
+  private async detectWithTimeout(url: string) {
+    const ocr = await this.getOcr();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        ocr.detect(url),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error(`OCR did not finish within ${OCR_PASS_TIMEOUT_MS / 1000} seconds.`)), OCR_PASS_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
   }
 
   private addDiagnostic(stage: string, message: string, technical?: string): void {
@@ -601,6 +673,15 @@ export class App {
     const previous = this.cropPreviewUrl();
     this.cropPreviewUrl.set(pass.url);
     if (previous) URL.revokeObjectURL(previous);
+  }
+
+  private clearFailedCropPreview(url: string, technical?: string): void {
+    if (this.cropPreviewUrl() !== url) return;
+    this.cropPreviewUrl.set(null);
+    URL.revokeObjectURL(url);
+    this.cropRect.set(null);
+    this.automaticCropSuggested.set(false);
+    this.addDiagnostic('Selected crop preview', 'The selected region could not be displayed. Draw the crop again and retry.', technical);
   }
 
   private async createSuggestedCrop(lines: OcrLine[], containerId: string, image: Blob): Promise<CropRect | null> {

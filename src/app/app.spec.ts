@@ -77,6 +77,37 @@ describe('App', () => {
     }
   });
 
+  it('should retry a failed image preview with fresh object URLs', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      previewUrl: () => string | null;
+      diagnostics: () => Array<{ stage: string }>;
+      useImage(image: Blob, name: string): void;
+      retryPreview(failedUrl: string): void;
+    };
+    const createObjectUrl = vi.fn()
+      .mockReturnValueOnce('blob:preview-1')
+      .mockReturnValueOnce('blob:preview-2')
+      .mockReturnValueOnce('blob:preview-3');
+    const revokeObjectUrl = vi.fn();
+    vi.stubGlobal('URL', { createObjectURL: createObjectUrl, revokeObjectURL: revokeObjectUrl });
+
+    try {
+      app.useImage(new Blob(['image'], { type: 'image/jpeg' }), 'container.jpg');
+      app.retryPreview('blob:preview-1');
+      app.retryPreview('blob:preview-2');
+      app.retryPreview('blob:preview-3');
+
+      expect(createObjectUrl).toHaveBeenCalledTimes(3);
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:preview-1');
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:preview-2');
+      expect(app.previewUrl()).toBeNull();
+      expect(app.diagnostics().some((diagnostic) => diagnostic.stage === 'Image preview')).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('should clear OCR fields when choosing a new image', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -206,6 +237,42 @@ describe('App', () => {
 
     expect(app.cropRect()).toBeNull();
     expect(app.diagnostics().some((diagnostic) => diagnostic.stage === 'Manual crop' && diagnostic.message === 'The selected region could not be prepared. Adjust the rectangle or choose the image again.')).toBe(true);
+  });
+
+  it('should regenerate a failed selected-crop preview', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      cropRect: { set(value: { x: number; y: number; width: number; height: number }): void };
+      cropPreviewUrl: { set(value: string | null): void; (): string | null };
+      updateCropPreview: ReturnType<typeof vi.fn>;
+      retryCropPreview(url: string): Promise<void>;
+    };
+    const crop = { x: 0.2, y: 0.2, width: 0.3, height: 0.3 };
+    app.cropRect.set(crop);
+    app.cropPreviewUrl.set('blob:failed-crop');
+    app.updateCropPreview = vi.fn().mockImplementation(async () => app.cropPreviewUrl.set('blob:replacement-crop'));
+
+    await app.retryCropPreview('blob:failed-crop');
+
+    expect(app.updateCropPreview).toHaveBeenCalledWith(crop);
+    expect(app.cropPreviewUrl()).toBe('blob:replacement-crop');
+  });
+
+  it('should recreate local OCR once after a failed detection', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      getOcr: ReturnType<typeof vi.fn>;
+      detectWithRecovery(url: string, recovery: { retried: boolean }): Promise<string[]>;
+    };
+    const firstOcr = { detect: vi.fn().mockRejectedValue(new Error('stalled worker')) };
+    const replacementOcr = { detect: vi.fn().mockResolvedValue(['container text']) };
+    app.getOcr = vi.fn().mockResolvedValueOnce(firstOcr).mockResolvedValueOnce(replacementOcr);
+
+    await expect(app.detectWithRecovery('blob:crop', { retried: false })).resolves.toEqual(['container text']);
+
+    expect(firstOcr.detect).toHaveBeenCalledWith('blob:crop');
+    expect(replacementOcr.detect).toHaveBeenCalledWith('blob:crop');
+    expect(app.getOcr).toHaveBeenCalledTimes(2);
   });
 
   it('should use a loaded image element when bitmap and image decode fail', async () => {

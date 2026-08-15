@@ -21,7 +21,7 @@
         @if (cropEditorOpen()) {
           <section class="crop-editor" aria-labelledby="crop-editor-title">
             <div class="crop-canvas" (pointerdown)="startCrop($event)" (pointermove)="updateCrop($event)" (pointerup)="finishCrop($event)" (pointercancel)="finishCrop($event)">
-              <img [src]="url" alt="Container image being cropped" draggable="false" />
+              <img [src]="url" alt="Container image being cropped" draggable="false" (error)="retryPreview(url)" />
               <div class="crop-selection" [style.left.%]="cropDraft().x * 100" [style.top.%]="cropDraft().y * 100" [style.width.%]="cropDraft().width * 100" [style.height.%]="cropDraft().height * 100">
                 @for (handle of cropResizeHandles; track handle) {
                   <button class="crop-handle {{ handle }}" type="button" [attr.aria-label]="cropResizeHandleLabel(handle)" (pointerdown)="startCropResize($event, handle)"></button>
@@ -31,7 +31,7 @@
             <div class="crop-actions"><button class="secondary" type="button" [disabled]="applyingCrop() || processing()" (click)="closeCropEditor()">Cancel</button><button class="primary run-button" type="button" [disabled]="applyingCrop() || processing()" (click)="applyCropAndProcess()">Use selected region</button></div>
           </section>
         } @else {
-          <figure class="image-preview"><img [src]="url" alt="Selected container" /><figcaption>{{ sourceName() }}</figcaption></figure>
+          <figure class="image-preview"><img [src]="url" alt="Selected container" (error)="retryPreview(url)" /><figcaption>{{ sourceName() }}</figcaption></figure>
         }
       } @else {
         <div class="empty-preview"><p>Use a close, well-lit image of one container side.</p><div><button class="primary" type="button" (click)="openCamera()">Take photo</button><button class="secondary" type="button" (click)="openFilePicker()">Choose image</button></div></div>
@@ -39,7 +39,7 @@
       @if (hasImage() && !cameraOpen()) {
         <div class="source-actions"><button class="secondary" type="button" (click)="openCamera()">Take another photo</button><button class="secondary" type="button" (click)="openFilePicker()">Choose another image</button></div>
         @if (cropRect() && !cropEditorOpen()) {
-          <section class="selected-crop" aria-labelledby="selected-crop-title"><div><p class="eyebrow">MANUAL OCR REGION</p><h3 id="selected-crop-title">Selected crop</h3><p>Only this region will be scanned when you run local OCR.</p></div>@if (cropPreviewUrl(); as cropUrl) { <img [src]="cropUrl" alt="Preview of selected OCR region" /> }<button class="text-button" type="button" (click)="clearCrop()">Remove crop</button></section>
+          <section class="selected-crop" aria-labelledby="selected-crop-title"><div><p class="eyebrow">MANUAL OCR REGION</p><h3 id="selected-crop-title">Selected crop</h3><p>Only this region will be scanned when you run local OCR.</p></div>@if (cropPreviewUrl(); as cropUrl) { <img [src]="cropUrl" alt="Preview of selected OCR region" (error)="retryCropPreview(cropUrl)" /> }<button class="text-button" type="button" (click)="clearCrop()">Remove crop</button></section>
         }
       }
     </section>
