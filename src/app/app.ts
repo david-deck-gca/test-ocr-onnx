@@ -901,6 +901,9 @@ export class App {
       return { source: bitmap, width: bitmap.width, height: bitmap.height, release: () => bitmap.close() };
     } catch (error: unknown) {
       bitmapError = error;
+    }
+    let imageError: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
       const url = URL.createObjectURL(image);
       const element = new Image();
       try {
@@ -928,15 +931,16 @@ export class App {
         };
       } catch (error: unknown) {
         URL.revokeObjectURL(url);
-        const details = [
-          `type=${image.type || 'unknown'}`,
-          `size=${Math.round(image.size / 1024)}KiB`,
-          `ImageBitmap=${this.errorMessage(bitmapError)}`,
-          `HTMLImage=${this.errorMessage(error)}`,
-        ].join(', ');
-        throw new Error(`Unable to decode the source image (${details}).`);
+        imageError = error;
       }
     }
+    const details = [
+      `type=${image.type || 'unknown'}`,
+      `size=${Math.round(image.size / 1024)}KiB`,
+      `ImageBitmap=${this.errorMessage(bitmapError)}`,
+      `HTMLImage=${this.errorMessage(imageError)}`,
+    ].join(', ');
+    throw new Error(`Unable to decode the source image (${details}).`);
   }
 
   private deduplicateLines(lines: OcrLine[]): OcrLine[] {

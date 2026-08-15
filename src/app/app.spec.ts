@@ -357,6 +357,44 @@ describe('App', () => {
     }
   });
 
+  it('should retry source-image loading with a fresh object URL', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      decodeImage(image: Blob): Promise<{ width: number; height: number; release(): void }>;
+    };
+    const createObjectUrl = vi.fn().mockReturnValueOnce('blob:first-attempt').mockReturnValueOnce('blob:second-attempt');
+    const revokeObjectUrl = vi.fn();
+    let imageCount = 0;
+
+    vi.stubGlobal('createImageBitmap', vi.fn().mockRejectedValue(new Error('ImageBitmap unavailable')));
+    vi.stubGlobal('URL', { createObjectURL: createObjectUrl, revokeObjectURL: revokeObjectUrl });
+    vi.stubGlobal('Image', class {
+      naturalWidth = 640;
+      naturalHeight = 480;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor() {
+        imageCount++;
+      }
+      set src(_value: string) {
+        queueMicrotask(() => imageCount === 1 ? this.onerror?.() : this.onload?.());
+      }
+      decode = vi.fn().mockResolvedValue(undefined);
+    });
+
+    try {
+      const decoded = await app.decodeImage(new Blob(['image'], { type: 'image/jpeg' }));
+
+      expect(decoded.width).toBe(640);
+      expect(createObjectUrl).toHaveBeenCalledTimes(2);
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:first-attempt');
+      decoded.release();
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:second-attempt');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('should cap manual crop output dimensions by pixel budget', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
