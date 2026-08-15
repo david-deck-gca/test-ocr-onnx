@@ -1,3 +1,4 @@
+.raw-scan-heading { align-items: baseline; display: flex; gap: 8px; justify-content: space-between; margin-bottom: 3px; }.raw-scan-heading strong { color: #dce8de; font-size: .68rem; }.raw-scan-heading span { color: #8cae91; font-size: .62rem; white-space: nowrap; }
 :host { color: #eaf0eb; display: block; min-height: 100dvh; }
 .container-id input{padding-right:190px}.container-id small{bottom:13px;margin:0;position:absolute;right:10px}
 main{max-width:1180px;margin:0 auto;padding:0 24px 48px}

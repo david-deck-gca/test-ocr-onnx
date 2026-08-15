@@ -13,7 +13,7 @@
     <section class="capture-panel" aria-label="Image capture">
       <input #fileInput type="file" accept="image/*" hidden (change)="selectFile($event)" />
       <div class="status" [class.busy]="processing()"><span></span><p>{{ status() }}</p></div>
-      <div class="capture-mode" role="radiogroup" aria-label="Capture mode"><label><input type="radio" name="capture-mode" value="auto-crop" [checked]="captureMode() === 'auto-crop'" (change)="setCaptureMode('auto-crop')" />Auto crop</label><label><input type="radio" name="capture-mode" value="manual-crop" [checked]="captureMode() === 'manual-crop'" (change)="setCaptureMode('manual-crop')" />Manual crop</label></div>
+      <div class="capture-mode" role="radiogroup" aria-label="Capture mode"><label><input type="radio" name="capture-mode" value="manual-crop" [checked]="captureMode() === 'manual-crop'" (change)="setCaptureMode('manual-crop')" />Manual crop</label><label><input type="radio" name="capture-mode" value="auto-crop" [checked]="captureMode() === 'auto-crop'" (change)="setCaptureMode('auto-crop')" />Auto crop</label></div>
 
       @if (cameraOpen()) {
         <div class="camera-frame"><video #videoPreview autoplay playsinline muted></video><div class="camera-actions"><button class="secondary" type="button" (click)="closeCamera()">Cancel</button><button class="primary" type="button" (click)="capturePhoto()">Capture photo</button></div></div>
@@ -65,7 +65,7 @@
       </div>
       </div>
       <div class="result-actions"><button class="secondary" type="button" [disabled]="!hasImage()" (click)="saveJsonToIndexedDb()">Save</button></div>
-    <div class="raw-text"><h3>Raw detected text</h3>@if (rawScans().length) { <div class="raw-scans">@for (scan of rawScans(); track scan.label) { <section><strong>{{ scan.label }}</strong>@if (scan.lines.length) { <table [attr.aria-label]="'Detected text for ' + scan.label"><thead><tr><th>Text</th><th>Confidence</th></tr></thead><tbody>@for (line of scan.lines; track line.text) { <tr><td>{{ line.text }}</td><td>{{ line.confidence }}%</td></tr> }</tbody></table> } @else { <p>No text detected.</p> }</section> }</div> } @else { <p>Detected lines will be retained here with the exported record.</p> }</div>
+    <div class="raw-text"><h3>Raw detected text</h3>@if (rawScans().length) { <div class="raw-scans">@for (scan of rawScans(); track scan.label) { <section><div class="raw-scan-heading"><strong>{{ scan.label }}</strong><span>{{ scan.durationMs }} ms</span></div>@if (scan.lines.length) { <table [attr.aria-label]="'Detected text for ' + scan.label"><thead><tr><th>Text</th><th>Confidence</th></tr></thead><tbody>@for (line of scan.lines; track line.text) { <tr><td>{{ line.text }}</td><td>{{ line.confidence }}%</td></tr> }</tbody></table> } @else { <p>No text detected.</p> }</section> }</div> } @else { <p>Detected lines will be retained here with the exported record.</p> }</div>
   </section>
   </section>
 </main>

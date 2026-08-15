@@ -11,7 +11,7 @@ type BoxBounds = { left: number; top: number; right: number; bottom: number };
 type CropResizeHandle = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 type DecodedImage = { source: CanvasImageSource; width: number; height: number; release: () => void };
 type OcrPass = { label: string; url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean };
-type RawScan = { label: string; lines: Array<{ text: string; confidence: number }> };
+type RawScan = { label: string; lines: Array<{ text: string; confidence: number }>; durationMs: number };
 const DEFAULT_CROP: CropRect = { x: 0, y: 0, width: 1, height: 1 };
 const MAX_FULL_PHOTO_PIXELS = 4_000_000;
 const MAX_MANUAL_CROP_PIXELS = 4_000_000;
@@ -49,7 +49,7 @@ export class App {
   protected readonly applyingCrop = signal(false);
   protected readonly automaticCropSuggested = signal(false);
   protected readonly cropResizeHandles: CropResizeHandle[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
-  protected readonly captureMode = signal<CaptureMode>('auto-crop');
+  protected readonly captureMode = signal<CaptureMode>('manual-crop');
   protected readonly processingMode = signal<ProcessingMode>('full-photo');
   protected readonly cameraOpen = signal(false);
   protected readonly processing = signal(false);
@@ -302,6 +302,7 @@ export class App {
       try {
         for (const [index, pass] of passes.entries()) {
           this.status.set(`Scanning ${pass.label} (${index + 1} of ${passes.length})...`);
+          const startedAt = performance.now();
           const detected = await ocr.detect(pass.url);
           const scan = detected.map((line) => ({
             ...line,
@@ -313,6 +314,7 @@ export class App {
           this.rawScans.update((scans) => [...scans, {
             label: pass.label,
             lines: scan.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
+            durationMs: Math.round(performance.now() - startedAt),
           }]);
         }
       } finally {
@@ -430,6 +432,7 @@ export class App {
   }
 
   private async prepareInitialCrop(image: Blob, selection: number): Promise<void> {
+    const startedAt = performance.now();
     this.processing.set(true);
     this.status.set('Locating the container ID and markings in the full photo...');
     try {
@@ -447,12 +450,13 @@ export class App {
       const containerId = this.extractFields(lines).containerId.value;
       const suggestedCrop = await this.createSuggestedCrop(lines, containerId, image);
       if (selection !== this.imageSelection || this.cropRect()) return;
+      const duration = ` (${Math.round(performance.now() - startedAt)} ms)`;
       if (suggestedCrop) {
         this.cropDraft.set(suggestedCrop);
         this.automaticCropSuggested.set(true);
-        this.status.set('Container ID located. Review the suggested crop around it and the markings below.');
+        this.status.set(`Container ID located. Review the suggested crop around it and the markings below.${duration}`);
       } else {
-        this.status.set('Container ID was not located. Draw a crop around the ID and markings you want to scan.');
+        this.status.set(`Container ID was not located. Draw a crop around the ID and markings you want to scan.${duration}`);
       }
     } catch (error: unknown) {
       if (selection === this.imageSelection) {

@@ -42,7 +42,7 @@ describe('App', () => {
     expect(app.processingMode()).toBe('full-photo');
   });
 
-  it('should default to auto crop and render both capture mode choices', () => {
+  it('should default to manual crop and render both capture mode choices', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       captureMode: () => string;
@@ -51,8 +51,8 @@ describe('App', () => {
 
     const radios = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLInputElement>('input[name="capture-mode"]'));
 
-    expect(app.captureMode()).toBe('auto-crop');
-    expect(radios.map((radio) => radio.value)).toEqual(['auto-crop', 'manual-crop']);
+    expect(app.captureMode()).toBe('manual-crop');
+    expect(radios.map((radio) => radio.value)).toEqual(['manual-crop', 'auto-crop']);
     expect(radios[0].checked).toBe(true);
   });
 
@@ -99,17 +99,18 @@ describe('App', () => {
   it('should render raw text grouped by OCR scan', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
-      rawScans: { set(value: Array<{ label: string; lines: Array<{ text: string; confidence: number }> }>): void };
+      rawScans: { set(value: Array<{ label: string; lines: Array<{ text: string; confidence: number }>; durationMs: number }>): void };
     };
     app.rawScans.set([
-      { label: 'Full photo', lines: [{ text: 'HCSU 799790 9', confidence: 98 }] },
-      { label: 'Enhanced region 1', lines: [{ text: 'TARE 3,650 KG', confidence: 94 }] },
+      { label: 'Selected region', lines: [{ text: 'HCSU 799790 9', confidence: 98 }], durationMs: 320 },
+      { label: 'Selected region (2x)', lines: [{ text: 'TARE 3,650 KG', confidence: 94 }], durationMs: 480 },
     ]);
     fixture.detectChanges();
 
     const panel = (fixture.nativeElement as HTMLElement).querySelector('.raw-text')!;
-    expect(panel.textContent).toContain('Full photo');
-    expect(panel.textContent).toContain('Enhanced region 1');
+    expect(panel.textContent).toContain('Selected region');
+    expect(panel.textContent).toContain('320 ms');
+    expect(panel.textContent).toContain('480 ms');
     expect(panel.querySelectorAll('tbody tr')).toHaveLength(2);
     expect(panel.textContent).toContain('98%');
     expect(panel.textContent).not.toContain('(98%)');
@@ -539,6 +540,7 @@ describe('App', () => {
       imageSelection: number;
       cropDraft: () => { x: number; y: number; width: number; height: number };
       automaticCropSuggested: () => boolean;
+      status: () => string;
       getOcr(): Promise<{ detect(url: string): Promise<Array<{ text: string; mean: number; box: number[][] }>> }>;
       createCropPass(): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }>;
       createSuggestedCrop(lines: Array<{ text: string; mean: number; box: number[][] }>, containerId: string, image: Blob): Promise<{ x: number; y: number; width: number; height: number } | null>;
@@ -556,6 +558,7 @@ describe('App', () => {
 
     expect(app.cropDraft()).toEqual(focusedCrop);
     expect(app.automaticCropSuggested()).toBe(true);
+    expect(app.status()).toMatch(/markings below\. \(\d+ ms\)$/);
   });
 
 });
