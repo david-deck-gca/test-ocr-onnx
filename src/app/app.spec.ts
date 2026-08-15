@@ -127,6 +127,53 @@ describe('App', () => {
     expect(app.rawScans()).toEqual([]);
   });
 
+  it('should enable saving once an image is selected', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as { useImage(image: Blob, name: string): void };
+    vi.stubGlobal('URL', { createObjectURL: vi.fn().mockReturnValue('blob:selected-image'), revokeObjectURL: vi.fn() });
+
+    try {
+      app.useImage(new Blob(['image'], { type: 'image/jpeg' }), 'container.jpg');
+      fixture.detectChanges();
+
+      expect((fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.result-actions button')?.disabled).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('should create a display URL for a saved photo', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      hydrateSavedRecord(record: { id: string; savedAt: string; payload: unknown; image: Blob }): { imageUrl: string | null };
+    };
+    const createObjectUrl = vi.fn().mockReturnValue('blob:saved-photo');
+    vi.stubGlobal('URL', { createObjectURL: createObjectUrl });
+
+    try {
+      const record = app.hydrateSavedRecord({ id: 'record-1', savedAt: '2026-08-15T08:00:00.000Z', payload: {}, image: new Blob(['image'], { type: 'image/jpeg' }) });
+
+      expect(record.imageUrl).toBe('blob:saved-photo');
+      expect(createObjectUrl).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('should render saved records with JSON and delete controls', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      savedRecords: { set(records: Array<{ id: string; savedAt: string; payload: unknown; imageUrl: string | null }>): void };
+    };
+    app.savedRecords.set([{ id: 'record-1', savedAt: '2026-08-15T08:00:00.000Z', payload: { source: { fileName: 'container.jpg' } }, imageUrl: 'blob:saved-photo' }]);
+    fixture.detectChanges();
+
+    const savedResults = (fixture.nativeElement as HTMLElement).querySelector('.saved-results')!;
+    expect(savedResults.textContent).toContain('container.jpg');
+    expect(savedResults.textContent).toContain('View JSON');
+    expect(savedResults.textContent).toContain('Delete');
+  });
+
   it('should render raw text grouped by OCR scan', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {

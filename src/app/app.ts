@@ -12,6 +12,8 @@ type CropResizeHandle = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right
 type DecodedImage = { source: CanvasImageSource; width: number; height: number; release: () => void };
 type OcrPass = { label: string; url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean };
 type RawScan = { label: string; lines: Array<{ text: string; confidence: number }>; durationMs: number };
+type StoredRecord = { id: string; savedAt: string; payload: unknown; image?: Blob };
+type SavedRecord = StoredRecord & { imageUrl: string | null };
 const DEFAULT_CROP: CropRect = { x: 0, y: 0, width: 1, height: 1 };
 const MAX_FULL_PHOTO_PIXELS = 4_000_000;
 const MAX_MANUAL_CROP_PIXELS = 4_000_000;
@@ -59,6 +61,8 @@ export class App {
   protected readonly diagnostics = signal<Diagnostic[]>([]);
   protected readonly rawText = signal<string[]>([]);
   protected readonly rawScans = signal<RawScan[]>([]);
+  protected readonly savedRecords = signal<SavedRecord[]>([]);
+  protected readonly savedJson = signal<string | null>(null);
   protected readonly fields = signal<Record<FieldKey, ContainerField>>({
     containerId: { value: '' },
     isoCode: { value: '' },
@@ -396,21 +400,57 @@ export class App {
   }
 
   protected async saveJsonToIndexedDb(): Promise<void> {
+    const image = this.imageBlob();
+    if (!image) {
+      this.addDiagnostic('IndexedDB', 'Choose or capture an image before saving a record.');
+      return;
+    }
     try {
       const database = await this.openSavedRecordsDatabase();
       const payload = this.createJsonPayload();
       const id = crypto.randomUUID();
       await new Promise<void>((resolve, reject) => {
         const transaction = database.transaction('records', 'readwrite');
-        transaction.objectStore('records').add({ id, savedAt: new Date().toISOString(), payload });
+        transaction.objectStore('records').add({ id, savedAt: new Date().toISOString(), payload, image });
         transaction.oncomplete = () => resolve();
         transaction.onerror = () => reject(transaction.error);
         transaction.onabort = () => reject(transaction.error);
       });
       database.close();
-      this.status.set('JSON data saved locally in IndexedDB.');
+      await this.loadSavedRecords();
+      this.status.set('Result and photo saved locally in IndexedDB.');
     } catch (error: unknown) {
       this.addDiagnostic('IndexedDB', 'JSON data could not be saved locally.', this.errorMessage(error));
+    }
+  }
+
+  protected showSavedJson(record: SavedRecord): void {
+    this.savedJson.set(JSON.stringify(record.payload, null, 2));
+  }
+
+  protected closeSavedJson(): void {
+    this.savedJson.set(null);
+  }
+
+  protected async deleteSavedRecord(id: string): Promise<void> {
+    try {
+      const database = await this.openSavedRecordsDatabase();
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction('records', 'readwrite');
+        transaction.objectStore('records').delete(id);
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+      });
+      database.close();
+      this.savedRecords.update((records) => {
+        const deleted = records.find((record) => record.id === id);
+        if (deleted?.imageUrl) URL.revokeObjectURL(deleted.imageUrl);
+        return records.filter((record) => record.id !== id);
+      });
+      this.status.set('Saved record deleted.');
+    } catch (error: unknown) {
+      this.addDiagnostic('IndexedDB', 'The saved record could not be deleted.', this.errorMessage(error));
     }
   }
 
@@ -428,6 +468,13 @@ export class App {
     if (cropPreview) {
       URL.revokeObjectURL(cropPreview);
     }
+    for (const record of this.savedRecords()) {
+      if (record.imageUrl) URL.revokeObjectURL(record.imageUrl);
+    }
+  }
+
+  protected ngOnInit(): void {
+    void this.loadSavedRecords();
   }
 
   private useImage(image: Blob, name: string): void {
@@ -473,6 +520,36 @@ export class App {
     });
     this.rawText.set([]);
     this.rawScans.set([]);
+  }
+
+  private async loadSavedRecords(): Promise<void> {
+    try {
+      const database = await this.openSavedRecordsDatabase();
+      const records = await new Promise<StoredRecord[]>((resolve, reject) => {
+        const transaction = database.transaction('records', 'readonly');
+        const request = transaction.objectStore('records').getAll();
+        request.onsuccess = () => resolve(request.result as StoredRecord[]);
+        request.onerror = () => reject(request.error);
+      });
+      database.close();
+      for (const record of this.savedRecords()) {
+        if (record.imageUrl) URL.revokeObjectURL(record.imageUrl);
+      }
+      this.savedRecords.set(records
+        .sort((first, second) => second.savedAt.localeCompare(first.savedAt))
+        .map((record) => this.hydrateSavedRecord(record)));
+    } catch (error: unknown) {
+      this.addDiagnostic('IndexedDB', 'Saved records could not be loaded.', this.errorMessage(error));
+    }
+  }
+
+  private hydrateSavedRecord(record: StoredRecord): SavedRecord {
+    return { ...record, imageUrl: record.image instanceof Blob ? URL.createObjectURL(record.image) : null };
+  }
+
+  protected savedRecordName(record: SavedRecord): string {
+    const source = (record.payload as { source?: { fileName?: unknown } }).source;
+    return typeof source?.fileName === 'string' && source.fileName ? source.fileName : 'Container image';
   }
 
   private async prepareInitialCrop(image: Blob, selection: number): Promise<void> {
