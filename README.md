@@ -13,7 +13,7 @@
 
 # Installation en mode hors connection
 - Ouvrir l’[URL de l'application](https://gcatrans.github.io/test-ocr-onnx-develop/).
-- Type de terminal
+- Type de terminal (iOS recommandé)
   - iOS
     - Appuyer sur le bouton « Partager » de Safari (carré avec une flèche vers le haut).
     - Sélectionner "Ajouter à l'écran d'accueil".
