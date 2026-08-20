@@ -42,18 +42,19 @@ describe('App', () => {
     expect(app.processingMode()).toBe('full-photo');
   });
 
-  it('should default to manual crop and render both capture mode choices', () => {
+  it('should default to a pressed Manual crop-mode button', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       captureMode: () => string;
     };
     fixture.detectChanges();
 
-    const radios = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLInputElement>('input[name="capture-mode"]'));
+    const buttons = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.capture-mode-button'));
 
     expect(app.captureMode()).toBe('manual-crop');
-    expect(radios.map((radio) => radio.value)).toEqual(['manual-crop', 'auto-crop']);
-    expect(radios[0].checked).toBe(true);
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual(['Manual', 'Auto']);
+    expect(buttons[0].getAttribute('aria-pressed')).toBe('true');
+    expect(buttons[1].getAttribute('aria-pressed')).toBe('false');
   });
 
   it('should not start automatic OCR when a manual-crop image is selected', () => {
