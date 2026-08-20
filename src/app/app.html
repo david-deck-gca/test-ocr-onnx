@@ -13,7 +13,7 @@
     <section class="capture-panel" aria-label="Image capture">
       <input #fileInput type="file" accept="image/*" hidden (change)="selectFile($event)" />
       <div class="status" [class.busy]="processing()"><span></span><p>{{ status() }}</p></div>
-      <div class="capture-mode" role="group" aria-label="Crop mode"><span>Crop :</span><button class="capture-mode-button" type="button" [class.active]="captureMode() === 'manual-crop'" [attr.aria-pressed]="captureMode() === 'manual-crop'" [disabled]="processing() || applyingCrop()" (click)="setCaptureMode('manual-crop')">Manual</button><button class="capture-mode-button" type="button" [class.active]="captureMode() === 'auto-crop'" [attr.aria-pressed]="captureMode() === 'auto-crop'" [disabled]="processing() || applyingCrop()" (click)="setCaptureMode('auto-crop')">Auto</button></div>
+      <div class="capture-controls"><div class="capture-mode" role="group" aria-label="Crop mode"><span>Crop :</span><button class="capture-mode-button" type="button" [class.active]="captureMode() === 'manual-crop'" [attr.aria-pressed]="captureMode() === 'manual-crop'" [disabled]="processing() || applyingCrop()" (click)="setCaptureMode('manual-crop')">Manual</button><button class="capture-mode-button" type="button" [class.active]="captureMode() === 'auto-crop'" [attr.aria-pressed]="captureMode() === 'auto-crop'" [disabled]="processing() || applyingCrop()" (click)="setCaptureMode('auto-crop')">Auto</button></div><div class="photo-actions" role="group" aria-label="Photo source"><span>Photo:</span><button class="capture-mode-button" type="button" [disabled]="processing() || applyingCrop() || cameraOpen()" (click)="openCamera()">New</button><button class="capture-mode-button" type="button" [disabled]="processing() || applyingCrop() || cameraOpen()" (click)="openFilePicker()">Existing</button></div></div>
 
       @if (cameraOpen()) {
         <div class="camera-frame"><video #videoPreview autoplay playsinline muted></video><div class="camera-actions"><button class="secondary" type="button" (click)="closeCamera()">Cancel</button><button class="primary" type="button" (click)="capturePhoto()">Capture photo</button></div></div>
@@ -28,16 +28,13 @@
                 }
               </div>
             </div>
-            <div class="crop-actions"><button class="secondary" type="button" [disabled]="applyingCrop() || processing()" (click)="closeCropEditor()">Cancel</button><button class="primary run-button" type="button" [disabled]="applyingCrop() || processing()" (click)="applyCropAndProcess()">Use selected region</button></div>
+            <div class="crop-actions"><button class="primary run-button" type="button" [disabled]="applyingCrop() || processing()" (click)="applyCropAndProcess()">Use selected region</button></div>
           </section>
         } @else {
           <figure class="image-preview"><img [src]="url" alt="Selected container" (error)="retryPreview(url)" /><figcaption>{{ sourceName() }}</figcaption></figure>
         }
       } @else {
-        <div class="empty-preview"><p>Use a close, well-lit image of one container side.</p><div><button class="primary" type="button" (click)="openCamera()">Take photo</button><button class="secondary" type="button" (click)="openFilePicker()">Choose image</button></div></div>
-      }
-      @if (hasImage() && !cameraOpen()) {
-        <div class="source-actions"><button class="secondary" type="button" [disabled]="processing() || applyingCrop()" (click)="openCamera()">Take another photo</button><button class="secondary" type="button" [disabled]="processing() || applyingCrop()" (click)="openFilePicker()">Choose another image</button></div>
+        <div class="empty-preview"><p>Use a close, well-lit image of one container side.</p></div>
       }
     </section>
 

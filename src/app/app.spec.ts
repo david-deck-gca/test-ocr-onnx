@@ -22,6 +22,20 @@ describe('App', () => {
     expect(compiled.querySelector('input[type="file"]')?.getAttribute('capture')).toBeNull();
   });
 
+  it('should render same-sized New and Existing photo-source buttons beside crop mode', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+
+    const compiled = fixture.nativeElement as HTMLElement;
+    const photoButtons = Array.from(compiled.querySelectorAll<HTMLButtonElement>('.photo-actions button'));
+
+    expect(photoButtons.map((button) => button.textContent?.trim())).toEqual(['New', 'Existing']);
+    expect(compiled.querySelector('.photo-actions > span')?.textContent?.trim()).toBe('Photo:');
+    expect(compiled.querySelector('.capture-controls')?.children).toHaveLength(2);
+    expect(compiled.querySelector('.empty-preview button')).toBeNull();
+    expect(compiled.querySelector('.source-actions')).toBeNull();
+  });
+
   it('should render empty field values by default', () => {
     const fixture = TestBed.createComponent(App);
     fixture.detectChanges();
@@ -49,12 +63,21 @@ describe('App', () => {
     };
     fixture.detectChanges();
 
-    const buttons = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.capture-mode-button'));
+    const buttons = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.capture-mode .capture-mode-button'));
 
     expect(app.captureMode()).toBe('manual-crop');
     expect(buttons.map((button) => button.textContent?.trim())).toEqual(['Manual', 'Auto']);
     expect(buttons[0].getAttribute('aria-pressed')).toBe('true');
     expect(buttons[1].getAttribute('aria-pressed')).toBe('false');
+    expect(buttons[1].classList.contains('active')).toBe(false);
+
+    buttons[1].click();
+    fixture.detectChanges();
+
+    expect(app.captureMode()).toBe('auto-crop');
+    expect(buttons[0].getAttribute('aria-pressed')).toBe('false');
+    expect(buttons[1].getAttribute('aria-pressed')).toBe('true');
+    expect(buttons[1].classList.contains('active')).toBe(true);
   });
 
   it('should not start automatic OCR when a manual-crop image is selected', () => {
@@ -217,6 +240,21 @@ describe('App', () => {
     expect(app.processImage).toHaveBeenCalled();
   });
 
+  it('should render only the Use selected region action in the crop editor', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      previewUrl: { set(value: string | null): void };
+      cropEditorOpen: { set(value: boolean): void };
+    };
+    app.previewUrl.set('blob:container-image');
+    app.cropEditorOpen.set(true);
+    fixture.detectChanges();
+
+    const buttons = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.crop-actions button'));
+
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual(['Use selected region']);
+  });
+
   it('should lock the visible crop while OCR is processing and unlock it afterwards', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -236,7 +274,6 @@ describe('App', () => {
     expect(compiled.querySelector('.crop-canvas.locked')).not.toBeNull();
     expect(compiled.querySelector('.crop-selection')).not.toBeNull();
     expect(compiled.querySelector<HTMLButtonElement>('.run-button')?.disabled).toBe(true);
-    expect(compiled.querySelector<HTMLButtonElement>('.crop-actions .secondary')?.disabled).toBe(true);
     expect(Array.from(compiled.querySelectorAll<HTMLButtonElement>('.crop-handle')).every((handle) => handle.disabled)).toBe(true);
 
     app.processing.set(false);
@@ -245,7 +282,6 @@ describe('App', () => {
 
     expect(compiled.querySelector('.crop-canvas.locked')).toBeNull();
     expect(compiled.querySelector<HTMLButtonElement>('.run-button')?.disabled).toBe(false);
-    expect(compiled.querySelector<HTMLButtonElement>('.crop-actions .secondary')?.disabled).toBe(false);
     expect(Array.from(compiled.querySelectorAll<HTMLButtonElement>('.crop-handle')).every((handle) => !handle.disabled)).toBe(true);
   });
 
