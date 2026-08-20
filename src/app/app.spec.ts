@@ -194,20 +194,58 @@ describe('App', () => {
     expect(panel.textContent).not.toContain('(98%)');
   });
 
-  it('should process the selected crop only after it is prepared', async () => {
+  it('should retain the crop editor and replace the previous crop before processing', async () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
-      applyCrop(): Promise<boolean>;
-      processImage(): Promise<void>;
+      cropDraft: { set(value: { x: number; y: number; width: number; height: number }): void };
+      cropRect: { set(value: { x: number; y: number; width: number; height: number } | null): void; (): { x: number; y: number; width: number; height: number } | null };
+      cropEditorOpen: { set(value: boolean): void; (): boolean };
+      processImage: ReturnType<typeof vi.fn>;
       applyCropAndProcess(): Promise<void>;
     };
-    app.applyCrop = vi.fn().mockResolvedValue(true);
+    const crop = { x: 0.2, y: 0.3, width: 0.4, height: 0.2 };
+    app.cropDraft.set(crop);
+    app.cropRect.set({ x: 0, y: 0, width: 1, height: 1 });
+    app.cropEditorOpen.set(true);
     app.processImage = vi.fn().mockResolvedValue(undefined);
 
     await app.applyCropAndProcess();
 
-    expect(app.applyCrop).toHaveBeenCalled();
+    expect(app.cropRect()).toEqual(crop);
+    expect(app.cropEditorOpen()).toBe(true);
     expect(app.processImage).toHaveBeenCalled();
+  });
+
+  it('should lock the visible crop while OCR is processing and unlock it afterwards', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      previewUrl: { set(value: string | null): void };
+      cropEditorOpen: { set(value: boolean): void };
+      cropDraft: { set(value: { x: number; y: number; width: number; height: number }): void };
+      processing: { set(value: boolean): void };
+      applyingCrop: { set(value: boolean): void };
+    };
+    app.previewUrl.set('blob:container-image');
+    app.cropEditorOpen.set(true);
+    app.cropDraft.set({ x: 0.2, y: 0.3, width: 0.4, height: 0.2 });
+    app.processing.set(true);
+    fixture.detectChanges();
+
+    const compiled = fixture.nativeElement as HTMLElement;
+    expect(compiled.querySelector('.crop-canvas.locked')).not.toBeNull();
+    expect(compiled.querySelector('.crop-selection')).not.toBeNull();
+    expect(compiled.querySelector<HTMLButtonElement>('.run-button')?.disabled).toBe(true);
+    expect(compiled.querySelector<HTMLButtonElement>('.crop-actions .secondary')?.disabled).toBe(true);
+    expect(Array.from(compiled.querySelectorAll<HTMLButtonElement>('.crop-handle')).every((handle) => handle.disabled)).toBe(true);
+
+    app.processing.set(false);
+    app.applyingCrop.set(false);
+    fixture.detectChanges();
+
+    expect(compiled.querySelector('.crop-canvas.locked')).toBeNull();
+    expect(compiled.querySelector<HTMLButtonElement>('.run-button')?.disabled).toBe(false);
+    expect(compiled.querySelector<HTMLButtonElement>('.crop-actions .secondary')?.disabled).toBe(false);
+    expect(Array.from(compiled.querySelectorAll<HTMLButtonElement>('.crop-handle')).every((handle) => !handle.disabled)).toBe(true);
   });
 
   it('should attach the camera stream after the video preview is rendered', async () => {
@@ -266,43 +304,6 @@ describe('App', () => {
     app.cropRect.set(crop);
 
     expect(app.createJsonPayload().source.manualCrop).toEqual(crop);
-  });
-
-  it('should keep the crop unselected when preview creation fails', async () => {
-    const fixture = TestBed.createComponent(App);
-    const app = fixture.componentInstance as unknown as {
-      cropDraft: { set(value: { x: number; y: number; width: number; height: number }): void };
-      cropRect: () => { x: number; y: number; width: number; height: number } | null;
-      diagnostics: () => Array<{ stage: string; message: string }>;
-      updateCropPreview(crop: { x: number; y: number; width: number; height: number }): Promise<void>;
-      applyCrop(): Promise<void>;
-    };
-    app.cropDraft.set({ x: 0.2, y: 0.2, width: 0.3, height: 0.3 });
-    app.updateCropPreview = () => Promise.reject(new Error('Canvas unavailable'));
-
-    await app.applyCrop();
-
-    expect(app.cropRect()).toBeNull();
-    expect(app.diagnostics().some((diagnostic) => diagnostic.stage === 'Manual crop' && diagnostic.message === 'The selected region could not be prepared. Adjust the rectangle or choose the image again.')).toBe(true);
-  });
-
-  it('should regenerate a failed selected-crop preview', async () => {
-    const fixture = TestBed.createComponent(App);
-    const app = fixture.componentInstance as unknown as {
-      cropRect: { set(value: { x: number; y: number; width: number; height: number }): void };
-      cropPreviewUrl: { set(value: string | null): void; (): string | null };
-      updateCropPreview: ReturnType<typeof vi.fn>;
-      retryCropPreview(url: string): Promise<void>;
-    };
-    const crop = { x: 0.2, y: 0.2, width: 0.3, height: 0.3 };
-    app.cropRect.set(crop);
-    app.cropPreviewUrl.set('blob:failed-crop');
-    app.updateCropPreview = vi.fn().mockImplementation(async () => app.cropPreviewUrl.set('blob:replacement-crop'));
-
-    await app.retryCropPreview('blob:failed-crop');
-
-    expect(app.updateCropPreview).toHaveBeenCalledWith(crop);
-    expect(app.cropPreviewUrl()).toBe('blob:replacement-crop');
   });
 
   it('should recreate local OCR once after a failed detection', async () => {

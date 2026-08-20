@@ -49,7 +49,6 @@ export class App {
   protected readonly cropEditorOpen = signal(false);
   protected readonly cropRect = signal<CropRect | null>(null);
   protected readonly cropDraft = signal<CropRect>(DEFAULT_CROP);
-  protected readonly cropPreviewUrl = signal<string | null>(null);
   protected readonly applyingCrop = signal(false);
   protected readonly automaticCropSuggested = signal(false);
   protected readonly cropResizeHandles: CropResizeHandle[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
@@ -96,7 +95,6 @@ export class App {
   private cropResize: { handle: CropResizeHandle; crop: CropRect } | null = null;
   private imageSelection = 0;
   private previewRetries = 0;
-  private cropPreviewRetries = 0;
 
   protected openFilePicker(): void {
     this.clearFields();
@@ -131,6 +129,7 @@ export class App {
   }
 
   protected startCrop(event: PointerEvent): void {
+    if (this.processing() || this.applyingCrop()) return;
     const point = this.cropPoint(event);
     if (!point) return;
     event.preventDefault();
@@ -141,6 +140,7 @@ export class App {
   }
 
   protected startCropResize(event: PointerEvent, handle: CropResizeHandle): void {
+    if (this.processing() || this.applyingCrop()) return;
     const point = this.cropPoint(event);
     if (!point) return;
     event.preventDefault();
@@ -153,6 +153,7 @@ export class App {
   }
 
   protected updateCrop(event: PointerEvent): void {
+    if (this.processing() || this.applyingCrop()) return;
     const point = this.cropPoint(event);
     if (!point) return;
     if (this.cropResize) {
@@ -176,43 +177,20 @@ export class App {
     }
   }
 
-  protected async applyCrop(): Promise<boolean> {
+  protected async applyCropAndProcess(): Promise<void> {
     const crop = this.cropDraft();
     if (crop.width < 0.02 || crop.height < 0.02) {
       this.addDiagnostic('Manual crop', 'Draw a larger rectangle around the marking to scan.');
-      return false;
+      return;
     }
     this.applyingCrop.set(true);
-    this.status.set('Preparing the selected crop...');
     try {
-      await this.updateCropPreview(crop);
-      this.cropPreviewRetries = 0;
       this.cropRect.set(crop);
       this.automaticCropSuggested.set(false);
-      this.cropEditorOpen.set(false);
-      this.status.set('Manual crop ready. Run local OCR to scan only the selected region.');
-      return true;
-    } catch (error: unknown) {
-      this.addDiagnostic('Manual crop', 'The selected region could not be prepared. Adjust the rectangle or choose the image again.', this.errorMessage(error));
+      await this.processImage();
     } finally {
       this.applyingCrop.set(false);
     }
-    return false;
-  }
-
-  protected async applyCropAndProcess(): Promise<void> {
-    if (await this.applyCrop()) {
-      await this.processImage();
-    }
-  }
-
-  protected clearCrop(): void {
-    this.cropRect.set(null);
-    this.automaticCropSuggested.set(false);
-    const preview = this.cropPreviewUrl();
-    if (preview) URL.revokeObjectURL(preview);
-    this.cropPreviewUrl.set(null);
-    this.status.set('Manual crop removed. OCR will use the selected processing approach.');
   }
 
   protected async openCamera(): Promise<void> {
@@ -290,26 +268,6 @@ export class App {
     this.previewUrl.set(null);
     URL.revokeObjectURL(failedUrl);
     this.addDiagnostic('Image preview', 'The selected image could not be displayed. Choose the image again.');
-  }
-
-  protected async retryCropPreview(failedUrl: string): Promise<void> {
-    const crop = this.cropRect();
-    if (!crop || this.cropPreviewUrl() !== failedUrl) return;
-
-    if (this.cropPreviewRetries < MAX_PREVIEW_RETRIES) {
-      this.cropPreviewRetries++;
-      this.status.set(`Selected crop preview failed to load. Retrying (${this.cropPreviewRetries} of ${MAX_PREVIEW_RETRIES})...`);
-      try {
-        await this.updateCropPreview(crop);
-        return;
-      } catch (error: unknown) {
-        if (this.cropPreviewUrl() !== failedUrl) return;
-        this.clearFailedCropPreview(failedUrl, this.errorMessage(error));
-        return;
-      }
-    }
-
-    this.clearFailedCropPreview(failedUrl);
   }
 
   protected updateField(key: FieldKey, value: string): void {
@@ -464,10 +422,6 @@ export class App {
     if (current) {
       URL.revokeObjectURL(current);
     }
-    const cropPreview = this.cropPreviewUrl();
-    if (cropPreview) {
-      URL.revokeObjectURL(cropPreview);
-    }
     for (const record of this.savedRecords()) {
       if (record.imageUrl) URL.revokeObjectURL(record.imageUrl);
     }
@@ -491,9 +445,6 @@ export class App {
     this.cropEditorOpen.set(true);
     this.cropRect.set(null);
     this.cropDraft.set(DEFAULT_CROP);
-    const cropPreview = this.cropPreviewUrl();
-    if (cropPreview) URL.revokeObjectURL(cropPreview);
-    this.cropPreviewUrl.set(null);
     this.rawText.set([]);
     this.rawScans.set([]);
     const selection = ++this.imageSelection;
@@ -741,24 +692,6 @@ export class App {
 
   protected cropResizeHandleLabel(handle: CropResizeHandle): string {
     return `Resize crop from ${handle.replace('-', ' ')}`;
-  }
-
-  private async updateCropPreview(crop: CropRect): Promise<void> {
-    const image = this.imageBlob();
-    if (!image) return;
-    const pass = await this.createCropPass(image, crop, 1, 520);
-    const previous = this.cropPreviewUrl();
-    this.cropPreviewUrl.set(pass.url);
-    if (previous) URL.revokeObjectURL(previous);
-  }
-
-  private clearFailedCropPreview(url: string, technical?: string): void {
-    if (this.cropPreviewUrl() !== url) return;
-    this.cropPreviewUrl.set(null);
-    URL.revokeObjectURL(url);
-    this.cropRect.set(null);
-    this.automaticCropSuggested.set(false);
-    this.addDiagnostic('Selected crop preview', 'The selected region could not be displayed. Draw the crop again and retry.', technical);
   }
 
   private async createSuggestedCrop(lines: OcrLine[], containerId: string, image: Blob): Promise<CropRect | null> {
