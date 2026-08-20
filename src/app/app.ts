@@ -3,19 +3,29 @@ import Ocr from '@gutenye/ocr-browser';
 import * as ort from 'onnxruntime-web';
 
 type ProcessingMode = 'full-photo' | 'guided-crop';
-type PayloadExportSource = 'detected' | 'calculated';
-type FieldKey = 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'calculatedPayloadKg' | 'calculatedPayloadLb' | 'capacityLiters' | 'capacityCubicMeters' | 'capacityCubicFeet';
+type CaptureMode = 'auto-crop' | 'manual-crop';
+type FieldKey = 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters' | 'capacityCubicMeters' | 'capacityCubicFeet';
 type OcrLine = { text: string; mean: number; box?: number[][] };
 type CropRect = { x: number; y: number; width: number; height: number };
 type BoxBounds = { left: number; top: number; right: number; bottom: number };
 type CropResizeHandle = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+type DecodedImage = { source: CanvasImageSource; width: number; height: number; release: () => void };
+type OcrPass = { label: string; url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean };
+type RawScan = { label: string; lines: Array<{ text: string; confidence: number }>; durationMs: number };
+type StoredRecord = { id: string; savedAt: string; payload: unknown; image?: Blob };
+type SavedRecord = StoredRecord & { imageUrl: string | null };
 const DEFAULT_CROP: CropRect = { x: 0, y: 0, width: 1, height: 1 };
+const MAX_FULL_PHOTO_PIXELS = 4_000_000;
+const MAX_MANUAL_CROP_PIXELS = 4_000_000;
+const MAX_MANUAL_RETRY_CROP_PIXELS = 2_000_000;
+const MAX_GUIDED_CROP_PIXELS = 2_000_000;
+const MAX_PREVIEW_RETRIES = 2;
+const OCR_PASS_TIMEOUT_MS = 45_000;
 
 interface ContainerField {
   value: string;
   unit?: string;
   confidence?: number;
-  calculated?: boolean;
   inferred?: boolean;
 }
 
@@ -43,12 +53,16 @@ export class App {
   protected readonly applyingCrop = signal(false);
   protected readonly automaticCropSuggested = signal(false);
   protected readonly cropResizeHandles: CropResizeHandle[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+  protected readonly captureMode = signal<CaptureMode>('manual-crop');
   protected readonly processingMode = signal<ProcessingMode>('full-photo');
   protected readonly cameraOpen = signal(false);
   protected readonly processing = signal(false);
   protected readonly status = signal('Choose a container image to begin.');
   protected readonly diagnostics = signal<Diagnostic[]>([]);
   protected readonly rawText = signal<string[]>([]);
+  protected readonly rawScans = signal<RawScan[]>([]);
+  protected readonly savedRecords = signal<SavedRecord[]>([]);
+  protected readonly savedJson = signal<string | null>(null);
   protected readonly fields = signal<Record<FieldKey, ContainerField>>({
     containerId: { value: '' },
     isoCode: { value: '' },
@@ -58,8 +72,6 @@ export class App {
     tareLb: { value: '', unit: 'LB' },
     payloadKg: { value: '', unit: 'KG' },
     payloadLb: { value: '', unit: 'LB' },
-    calculatedPayloadKg: { value: '', unit: 'KG', calculated: true },
-    calculatedPayloadLb: { value: '', unit: 'LB', calculated: true },
     capacityLiters: { value: '', unit: 'L' },
     capacityCubicMeters: { value: '', unit: 'CU.M.' },
     capacityCubicFeet: { value: '', unit: 'CU.FT.' },
@@ -76,10 +88,6 @@ export class App {
       net: /\bNET(?:\s*WEIGHT)?\b/.test(text),
     };
   });
-  protected readonly payloadExportSource = signal<PayloadExportSource>('calculated');
-  protected readonly canExportCalculatedPayload = computed(() => Boolean(
-    this.fields().calculatedPayloadKg.value || this.fields().calculatedPayloadLb.value,
-  ));
 
   private stream: MediaStream | null = null;
   private readonly injector = inject(Injector);
@@ -87,6 +95,8 @@ export class App {
   private cropStart: { x: number; y: number } | null = null;
   private cropResize: { handle: CropResizeHandle; crop: CropRect } | null = null;
   private imageSelection = 0;
+  private previewRetries = 0;
+  private cropPreviewRetries = 0;
 
   protected openFilePicker(): void {
     this.clearFields();
@@ -166,24 +176,33 @@ export class App {
     }
   }
 
-  protected async applyCrop(): Promise<void> {
+  protected async applyCrop(): Promise<boolean> {
     const crop = this.cropDraft();
     if (crop.width < 0.02 || crop.height < 0.02) {
       this.addDiagnostic('Manual crop', 'Draw a larger rectangle around the marking to scan.');
-      return;
+      return false;
     }
     this.applyingCrop.set(true);
     this.status.set('Preparing the selected crop...');
     try {
       await this.updateCropPreview(crop);
+      this.cropPreviewRetries = 0;
       this.cropRect.set(crop);
       this.automaticCropSuggested.set(false);
       this.cropEditorOpen.set(false);
       this.status.set('Manual crop ready. Run local OCR to scan only the selected region.');
+      return true;
     } catch (error: unknown) {
       this.addDiagnostic('Manual crop', 'The selected region could not be prepared. Adjust the rectangle or choose the image again.', this.errorMessage(error));
     } finally {
       this.applyingCrop.set(false);
+    }
+    return false;
+  }
+
+  protected async applyCropAndProcess(): Promise<void> {
+    if (await this.applyCrop()) {
+      await this.processImage();
     }
   }
 
@@ -251,26 +270,56 @@ export class App {
     this.processingMode.set(mode);
   }
 
+  protected setCaptureMode(mode: CaptureMode): void {
+    this.captureMode.set(mode);
+  }
+
+  protected retryPreview(failedUrl: string): void {
+    const image = this.imageBlob();
+    if (!image || this.previewUrl() !== failedUrl) return;
+
+    if (this.previewRetries < MAX_PREVIEW_RETRIES) {
+      this.previewRetries++;
+      const nextUrl = URL.createObjectURL(image);
+      this.previewUrl.set(nextUrl);
+      URL.revokeObjectURL(failedUrl);
+      this.status.set(`Image preview failed to load. Retrying (${this.previewRetries} of ${MAX_PREVIEW_RETRIES})...`);
+      return;
+    }
+
+    this.previewUrl.set(null);
+    URL.revokeObjectURL(failedUrl);
+    this.addDiagnostic('Image preview', 'The selected image could not be displayed. Choose the image again.');
+  }
+
+  protected async retryCropPreview(failedUrl: string): Promise<void> {
+    const crop = this.cropRect();
+    if (!crop || this.cropPreviewUrl() !== failedUrl) return;
+
+    if (this.cropPreviewRetries < MAX_PREVIEW_RETRIES) {
+      this.cropPreviewRetries++;
+      this.status.set(`Selected crop preview failed to load. Retrying (${this.cropPreviewRetries} of ${MAX_PREVIEW_RETRIES})...`);
+      try {
+        await this.updateCropPreview(crop);
+        return;
+      } catch (error: unknown) {
+        if (this.cropPreviewUrl() !== failedUrl) return;
+        this.clearFailedCropPreview(failedUrl, this.errorMessage(error));
+        return;
+      }
+    }
+
+    this.clearFailedCropPreview(failedUrl);
+  }
+
   protected updateField(key: FieldKey, value: string): void {
     this.fields.update((fields) => {
       const updated = {
         ...fields,
-        [key]: {
-          ...fields[key],
-          value,
-          ...(key === 'payloadKg' || key === 'payloadLb' ? { calculated: false } : {}),
-        },
+        [key]: { ...fields[key], value },
       };
-      return {
-        ...updated,
-        calculatedPayloadKg: this.calculatePayload(updated.payloadKg, updated.mpgmKg, updated.tareKg, 'KG'),
-        calculatedPayloadLb: this.calculatePayload(updated.payloadLb, updated.mpgmLb, updated.tareLb, 'LB'),
-      };
+      return updated;
     });
-  }
-
-  protected setPayloadExportSource(source: PayloadExportSource): void {
-    this.payloadExportSource.set(source);
   }
 
   protected async processImage(): Promise<void> {
@@ -291,29 +340,42 @@ export class App {
     }
     try {
       this.status.set('Loading local PaddleOCR models...');
-      const ocr = await this.getOcr();
       this.status.set(this.processingMode() === 'guided-crop' ? 'Preparing enlarged marking crops...' : 'Detecting painted text regions...');
-      const passes = await this.createOcrPasses(image, imageUrl);
-      const lines = this.deduplicateLines((await Promise.all(passes.map(async (pass) => {
-        try {
-          const detected = await ocr.detect(pass.url);
-          return detected.map((line) => ({
+      const passes = await this.createOcrPasses(image);
+      const scanResults: OcrLine[][] = [];
+      const recovery = { retried: false };
+      this.rawText.set([]);
+      this.rawScans.set([]);
+      try {
+        for (const [index, pass] of passes.entries()) {
+          this.status.set(`Scanning ${pass.label} (${index + 1} of ${passes.length})...`);
+          const startedAt = performance.now();
+          const detected = await this.detectWithRecovery(pass.url, recovery);
+          const scan = detected.map((line) => ({
             ...line,
             box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
           }));
-        } finally {
+          scanResults.push(scan);
+          const lines = this.deduplicateLines(scanResults.flat());
+          this.rawText.set(lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`));
+          this.rawScans.update((scans) => [...scans, {
+            label: pass.label,
+            lines: scan.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
+            durationMs: Math.round(performance.now() - startedAt),
+          }]);
+        }
+      } finally {
+        for (const pass of passes) {
           if (pass.revokeUrl) {
             URL.revokeObjectURL(pass.url);
           }
         }
-      }))).flat());
+      }
+      const lines = this.deduplicateLines(scanResults.flat());
       const rawText = lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`);
       this.rawText.set(rawText);
       const fields = this.extractFields(lines);
       this.fields.set(fields);
-      this.payloadExportSource.set(
-        fields.calculatedPayloadKg.value || fields.calculatedPayloadLb.value ? 'calculated' : 'detected',
-      );
       let suggestedCrop: CropRect | null = null;
       if (!this.cropRect()) {
         try {
@@ -328,7 +390,7 @@ export class App {
         this.cropEditorOpen.set(true);
         this.status.set('OCR complete. Review the suggested region around the container ID and markings beneath it.');
       } else {
-        this.status.set(`OCR complete. Found ${lines.length} text region${lines.length === 1 ? '' : 's'}. Review the fields before exporting.`);
+        this.status.set(`OCR complete. Found ${lines.length} text region${lines.length === 1 ? '' : 's'}. Review the fields before saving.`);
       }
       this.processing.set(false);
     } catch (error: unknown) {
@@ -337,32 +399,58 @@ export class App {
     }
   }
 
-  protected exportJson(): void {
-    const payload = this.createJsonPayload();
-    const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${this.sourceName().replace(/\.[^.]+$/, '') || 'container'}-ocr.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-  }
-
   protected async saveJsonToIndexedDb(): Promise<void> {
+    const image = this.imageBlob();
+    if (!image) {
+      this.addDiagnostic('IndexedDB', 'Choose or capture an image before saving a record.');
+      return;
+    }
     try {
       const database = await this.openSavedRecordsDatabase();
       const payload = this.createJsonPayload();
       const id = crypto.randomUUID();
       await new Promise<void>((resolve, reject) => {
         const transaction = database.transaction('records', 'readwrite');
-        transaction.objectStore('records').add({ id, savedAt: new Date().toISOString(), payload });
+        transaction.objectStore('records').add({ id, savedAt: new Date().toISOString(), payload, image });
         transaction.oncomplete = () => resolve();
         transaction.onerror = () => reject(transaction.error);
         transaction.onabort = () => reject(transaction.error);
       });
       database.close();
-      this.status.set('JSON data saved locally in IndexedDB.');
+      await this.loadSavedRecords();
+      this.status.set('Result and photo saved locally in IndexedDB.');
     } catch (error: unknown) {
       this.addDiagnostic('IndexedDB', 'JSON data could not be saved locally.', this.errorMessage(error));
+    }
+  }
+
+  protected showSavedJson(record: SavedRecord): void {
+    this.savedJson.set(JSON.stringify(record.payload, null, 2));
+  }
+
+  protected closeSavedJson(): void {
+    this.savedJson.set(null);
+  }
+
+  protected async deleteSavedRecord(id: string): Promise<void> {
+    try {
+      const database = await this.openSavedRecordsDatabase();
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction('records', 'readwrite');
+        transaction.objectStore('records').delete(id);
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+      });
+      database.close();
+      this.savedRecords.update((records) => {
+        const deleted = records.find((record) => record.id === id);
+        if (deleted?.imageUrl) URL.revokeObjectURL(deleted.imageUrl);
+        return records.filter((record) => record.id !== id);
+      });
+      this.status.set('Saved record deleted.');
+    } catch (error: unknown) {
+      this.addDiagnostic('IndexedDB', 'The saved record could not be deleted.', this.errorMessage(error));
     }
   }
 
@@ -380,6 +468,13 @@ export class App {
     if (cropPreview) {
       URL.revokeObjectURL(cropPreview);
     }
+    for (const record of this.savedRecords()) {
+      if (record.imageUrl) URL.revokeObjectURL(record.imageUrl);
+    }
+  }
+
+  protected ngOnInit(): void {
+    void this.loadSavedRecords();
   }
 
   private useImage(image: Blob, name: string): void {
@@ -389,6 +484,7 @@ export class App {
     }
     this.imageBlob.set(image);
     this.previewUrl.set(URL.createObjectURL(image));
+    this.previewRetries = 0;
     this.sourceName.set(name);
     this.applyingCrop.set(false);
     this.automaticCropSuggested.set(false);
@@ -399,8 +495,13 @@ export class App {
     if (cropPreview) URL.revokeObjectURL(cropPreview);
     this.cropPreviewUrl.set(null);
     this.rawText.set([]);
+    this.rawScans.set([]);
     const selection = ++this.imageSelection;
-    void this.prepareInitialCrop(image, this.previewUrl()!, selection);
+    if (this.captureMode() === 'manual-crop') {
+      this.status.set('Draw a crop around the ID and markings, then use the selected region to run OCR.');
+      return;
+    }
+    void this.prepareInitialCrop(image, selection);
   }
 
   private clearFields(): void {
@@ -413,31 +514,69 @@ export class App {
       tareLb: { value: '', unit: 'LB' },
       payloadKg: { value: '', unit: 'KG' },
       payloadLb: { value: '', unit: 'LB' },
-      calculatedPayloadKg: { value: '', unit: 'KG', calculated: true },
-      calculatedPayloadLb: { value: '', unit: 'LB', calculated: true },
       capacityLiters: { value: '', unit: 'L' },
       capacityCubicMeters: { value: '', unit: 'CU.M.' },
       capacityCubicFeet: { value: '', unit: 'CU.FT.' },
     });
     this.rawText.set([]);
-    this.payloadExportSource.set('calculated');
+    this.rawScans.set([]);
   }
 
-  private async prepareInitialCrop(image: Blob, imageUrl: string, selection: number): Promise<void> {
+  private async loadSavedRecords(): Promise<void> {
+    try {
+      const database = await this.openSavedRecordsDatabase();
+      const records = await new Promise<StoredRecord[]>((resolve, reject) => {
+        const transaction = database.transaction('records', 'readonly');
+        const request = transaction.objectStore('records').getAll();
+        request.onsuccess = () => resolve(request.result as StoredRecord[]);
+        request.onerror = () => reject(request.error);
+      });
+      database.close();
+      for (const record of this.savedRecords()) {
+        if (record.imageUrl) URL.revokeObjectURL(record.imageUrl);
+      }
+      this.savedRecords.set(records
+        .sort((first, second) => second.savedAt.localeCompare(first.savedAt))
+        .map((record) => this.hydrateSavedRecord(record)));
+    } catch (error: unknown) {
+      this.addDiagnostic('IndexedDB', 'Saved records could not be loaded.', this.errorMessage(error));
+    }
+  }
+
+  private hydrateSavedRecord(record: StoredRecord): SavedRecord {
+    return { ...record, imageUrl: record.image instanceof Blob ? URL.createObjectURL(record.image) : null };
+  }
+
+  protected savedRecordName(record: SavedRecord): string {
+    const source = (record.payload as { source?: { fileName?: unknown } }).source;
+    return typeof source?.fileName === 'string' && source.fileName ? source.fileName : 'Container image';
+  }
+
+  private async prepareInitialCrop(image: Blob, selection: number): Promise<void> {
+    const startedAt = performance.now();
     this.processing.set(true);
     this.status.set('Locating the container ID and markings in the full photo...');
     try {
-      const ocr = await this.getOcr();
-      const lines = this.deduplicateLines(await ocr.detect(imageUrl));
+      const pass = await this.createCropPass(image, DEFAULT_CROP, 1, undefined, MAX_FULL_PHOTO_PIXELS);
+      let lines: OcrLine[];
+      try {
+        lines = this.deduplicateLines((await this.detectWithRecovery(pass.url, { retried: false })).map((line) => ({
+          ...line,
+          box: line.box?.map(([x, y]) => [x / pass.scale, y / pass.scale]),
+        })));
+      } finally {
+        URL.revokeObjectURL(pass.url);
+      }
       const containerId = this.extractFields(lines).containerId.value;
       const suggestedCrop = await this.createSuggestedCrop(lines, containerId, image);
       if (selection !== this.imageSelection || this.cropRect()) return;
+      const duration = ` (${Math.round(performance.now() - startedAt)} ms)`;
       if (suggestedCrop) {
         this.cropDraft.set(suggestedCrop);
         this.automaticCropSuggested.set(true);
-        this.status.set('Container ID located. Review the suggested crop around it and the markings below.');
+        this.status.set(`Container ID located. Review the suggested crop around it and the markings below.${duration}`);
       } else {
-        this.status.set('Container ID was not located. Draw a crop around the ID and markings you want to scan.');
+        this.status.set(`Container ID was not located. Draw a crop around the ID and markings you want to scan.${duration}`);
       }
     } catch (error: unknown) {
       if (selection === this.imageSelection) {
@@ -455,7 +594,8 @@ export class App {
       return this.ocr;
     }
     ort.env.wasm.wasmPaths = new URL('ort/', document.baseURI).toString();
-    ort.env.wasm.numThreads = crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+    // One worker avoids allocating multiple large WASM heaps on memory-constrained mobile devices.
+    ort.env.wasm.numThreads = 1;
     this.ocr = await Ocr.create({
       models: {
         detectionPath: new URL('models/ch_PP-OCRv4_det_infer.onnx', document.baseURI).toString(),
@@ -464,6 +604,35 @@ export class App {
       },
     });
     return this.ocr;
+  }
+
+  private async detectWithRecovery(url: string, recovery: { retried: boolean }) {
+    try {
+      return await this.detectWithTimeout(url);
+    } catch (error: unknown) {
+      if (recovery.retried) throw error;
+      recovery.retried = true;
+      // The OCR package does not expose session disposal, but recreating its instance
+      // gives subsequent inference a fresh set of ONNX sessions.
+      this.ocr = null;
+      this.status.set('Local OCR stalled. Restarting local models and retrying once...');
+      return this.detectWithTimeout(url);
+    }
+  }
+
+  private async detectWithTimeout(url: string) {
+    const ocr = await this.getOcr();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        ocr.detect(url),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error(`OCR did not finish within ${OCR_PASS_TIMEOUT_MS / 1000} seconds.`)), OCR_PASS_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
   }
 
   private addDiagnostic(stage: string, message: string, technical?: string): void {
@@ -475,52 +644,67 @@ export class App {
     return error instanceof Error ? error.message : String(error);
   }
 
-  private async createOcrPasses(image: Blob, imageUrl: string): Promise<Array<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }>> {
+  private async createOcrPasses(image: Blob): Promise<OcrPass[]> {
     const manualCrop = this.cropRect();
     if (manualCrop) {
-      return [
-        await this.createCropPass(image, manualCrop, 1),
-        await this.createCropPass(image, manualCrop, 2),
-      ];
+      const passes: OcrPass[] = [];
+      try {
+        passes.push({ label: 'Selected region', ...await this.createCropPass(image, manualCrop, 1, undefined, MAX_MANUAL_CROP_PIXELS) });
+        passes.push({ label: 'Selected region (2x)', ...await this.createCropPass(image, manualCrop, 2, undefined, MAX_MANUAL_RETRY_CROP_PIXELS) });
+        return passes;
+      } catch (error: unknown) {
+        this.releaseOcrPasses(passes);
+        throw error;
+      }
     }
     if (this.processingMode() === 'full-photo') {
-      return [{ url: imageUrl, offsetX: 0, offsetY: 0, scale: 1, revokeUrl: false }];
+      return [{ label: 'Full photo', ...await this.createCropPass(image, DEFAULT_CROP, 1, undefined, MAX_FULL_PHOTO_PIXELS) }];
     }
 
-    const bitmap = await createImageBitmap(image);
+    const decodedImage = await this.decodeImage(image);
+    const enhancedPasses: OcrPass[] = [];
     try {
+      enhancedPasses.push({ label: 'Full photo', ...await this.createCropPass(image, DEFAULT_CROP, 1, undefined, MAX_FULL_PHOTO_PIXELS) });
       const overlap = 0.12;
-      const passes = [
+      const regions = [
         { x: 0, y: 0, width: 0.5 + overlap, height: 0.5 + overlap },
         { x: 0.5 - overlap, y: 0, width: 0.5 + overlap, height: 0.5 + overlap },
         { x: 0, y: 0.5 - overlap, width: 0.5 + overlap, height: 0.5 + overlap },
         { x: 0.5 - overlap, y: 0.5 - overlap, width: 0.5 + overlap, height: 0.5 + overlap },
       ];
-      const enhancedPasses = await Promise.all(passes.map(async (pass) => {
-        const sourceX = Math.round(pass.x * bitmap.width);
-        const sourceY = Math.round(pass.y * bitmap.height);
-        const sourceWidth = Math.min(bitmap.width - sourceX, Math.round(pass.width * bitmap.width));
-        const sourceHeight = Math.min(bitmap.height - sourceY, Math.round(pass.height * bitmap.height));
-        const scale = 2;
+      for (const [index, region] of regions.entries()) {
+        const sourceX = Math.round(region.x * decodedImage.width);
+        const sourceY = Math.round(region.y * decodedImage.height);
+        const sourceWidth = Math.min(decodedImage.width - sourceX, Math.round(region.width * decodedImage.width));
+        const sourceHeight = Math.min(decodedImage.height - sourceY, Math.round(region.height * decodedImage.height));
+        const scale = this.cropOutputScale(sourceWidth, sourceHeight, 2, undefined, MAX_GUIDED_CROP_PIXELS);
         const canvas = document.createElement('canvas');
-        canvas.width = sourceWidth * scale;
-        canvas.height = sourceHeight * scale;
+        canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+        canvas.height = Math.max(1, Math.round(sourceHeight * scale));
         const context = canvas.getContext('2d');
         if (!context) {
           throw new Error('Canvas 2D context is unavailable.');
         }
         context.filter = 'contrast(145%) grayscale(100%)';
-        context.drawImage(bitmap, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+        context.drawImage(decodedImage.source, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
         const crop = await new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => {
           if (blob) resolve(blob);
           else reject(new Error('Guided crop could not be created.'));
         }, 'image/png'));
-        return { url: URL.createObjectURL(crop), offsetX: sourceX, offsetY: sourceY, scale, revokeUrl: true };
-      }));
-      // Keep the native photo because rasterized crops can lose a small ISO check digit.
-      return [{ url: imageUrl, offsetX: 0, offsetY: 0, scale: 1, revokeUrl: false }, ...enhancedPasses];
+        enhancedPasses.push({ label: `Enhanced region ${index + 1}`, url: URL.createObjectURL(crop), offsetX: sourceX, offsetY: sourceY, scale, revokeUrl: true });
+      }
+      return enhancedPasses;
+    } catch (error: unknown) {
+      this.releaseOcrPasses(enhancedPasses);
+      throw error;
     } finally {
-      bitmap.close();
+      decodedImage.release();
+    }
+  }
+
+  private releaseOcrPasses(passes: OcrPass[]): void {
+    for (const pass of passes) {
+      if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
     }
   }
 
@@ -568,31 +752,42 @@ export class App {
     if (previous) URL.revokeObjectURL(previous);
   }
 
+  private clearFailedCropPreview(url: string, technical?: string): void {
+    if (this.cropPreviewUrl() !== url) return;
+    this.cropPreviewUrl.set(null);
+    URL.revokeObjectURL(url);
+    this.cropRect.set(null);
+    this.automaticCropSuggested.set(false);
+    this.addDiagnostic('Selected crop preview', 'The selected region could not be displayed. Draw the crop again and retry.', technical);
+  }
+
   private async createSuggestedCrop(lines: OcrLine[], containerId: string, image: Blob): Promise<CropRect | null> {
     const markingsBounds = this.suggestedMarkingBounds(lines, containerId);
     if (!markingsBounds) return null;
 
-    const bitmap = await createImageBitmap(image);
+    const decodedImage = await this.decodeImage(image);
     try {
       const padding = Math.max(24, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.08);
       const left = Math.max(0, markingsBounds.left - padding);
       const top = Math.max(0, markingsBounds.top - padding);
-      const right = Math.min(bitmap.width, markingsBounds.right + padding);
-      const bottom = Math.min(bitmap.height, markingsBounds.bottom + padding);
+      const right = Math.min(decodedImage.width, markingsBounds.right + padding);
+      const bottom = Math.min(decodedImage.height, markingsBounds.bottom + padding);
       return {
-        x: left / bitmap.width,
-        y: top / bitmap.height,
-        width: (right - left) / bitmap.width,
-        height: (bottom - top) / bitmap.height,
+        x: left / decodedImage.width,
+        y: top / decodedImage.height,
+        width: (right - left) / decodedImage.width,
+        height: (bottom - top) / decodedImage.height,
       };
     } finally {
-      bitmap.close();
+      decodedImage.release();
     }
   }
 
   private suggestedMarkingBounds(lines: OcrLine[], containerId: string): BoxBounds | null {
-    if (!containerId) return null;
-    const idLines = this.linesForContainerId(lines, containerId);
+    const cropAnchor = containerId || this.findContainerIdAnchor(lines);
+    if (!cropAnchor) return null;
+    const isIncompleteIdAnchor = !containerId;
+    const idLines = this.linesForContainerId(lines, cropAnchor);
     const idBounds = this.combineBounds(idLines.map((line) => this.boxBounds(line.box)).filter((bounds): bounds is BoxBounds => Boolean(bounds)));
     if (!idBounds) return null;
 
@@ -605,7 +800,29 @@ export class App {
       .filter((bounds) => bounds.bottom >= idBounds.top - idHeight
         && bounds.right >= idBounds.left - horizontalAllowance
         && bounds.left <= idBounds.right + horizontalAllowance);
-    return this.combineBounds([idBounds, ...relevantBounds]);
+    const markingsBounds = this.combineBounds([idBounds, ...relevantBounds]);
+    if (!markingsBounds || !isIncompleteIdAnchor) return markingsBounds;
+    return { ...markingsBounds, right: markingsBounds.right + idWidth / 10 };
+  }
+
+  private findContainerIdAnchor(lines: OcrLine[]): string {
+    const fragments = lines
+      .map((line, index) => ({
+        line,
+        index,
+        text: line.text.replace(/[^A-Z0-9]/gi, '').toUpperCase(),
+        bounds: this.boxBounds(line.box),
+      }))
+      .filter((fragment) => fragment.text && fragment.bounds)
+      .sort((first, second) => first.bounds!.top - second.bounds!.top || first.bounds!.left - second.bounds!.left);
+    for (let start = 0; start < fragments.length; start++) {
+      for (let length = 1; length <= 3 && start + length <= fragments.length; length++) {
+        const candidate = fragments.slice(start, start + length).map((fragment) => fragment.text).join('');
+        const anchor = candidate.match(/[A-Z]{3}[UJZ]\d{6}/)?.[0];
+        if (anchor) return anchor;
+      }
+    }
+    return '';
   }
 
   private linesForContainerId(lines: OcrLine[], containerId: string): OcrLine[] {
@@ -647,28 +864,83 @@ export class App {
     };
   }
 
-  private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumWidth?: number): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }> {
-    const bitmap = await createImageBitmap(image);
+  private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }> {
+    const decodedImage = await this.decodeImage(image);
     try {
-      const sourceX = Math.round(crop.x * bitmap.width);
-      const sourceY = Math.round(crop.y * bitmap.height);
-      const sourceWidth = Math.max(1, Math.round(crop.width * bitmap.width));
-      const sourceHeight = Math.max(1, Math.round(crop.height * bitmap.height));
-      const outputScale = maximumWidth ? Math.min(1, maximumWidth / sourceWidth) : scale;
+      const sourceX = Math.round(crop.x * decodedImage.width);
+      const sourceY = Math.round(crop.y * decodedImage.height);
+      const sourceWidth = Math.max(1, Math.round(crop.width * decodedImage.width));
+      const sourceHeight = Math.max(1, Math.round(crop.height * decodedImage.height));
+      const outputScale = this.cropOutputScale(sourceWidth, sourceHeight, scale, maximumWidth, maximumPixels);
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(sourceWidth * outputScale));
       canvas.height = Math.max(1, Math.round(sourceHeight * outputScale));
       const context = canvas.getContext('2d');
       if (!context) throw new Error('Canvas 2D context is unavailable.');
-      context.drawImage(bitmap, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+      context.drawImage(decodedImage.source, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
       const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((result) => {
         if (result) resolve(result);
         else reject(new Error('Manual crop could not be created.'));
       }, 'image/png'));
       return { url: URL.createObjectURL(blob), offsetX: sourceX, offsetY: sourceY, scale: outputScale, revokeUrl: true };
     } finally {
-      bitmap.close();
+      decodedImage.release();
     }
+  }
+
+  private cropOutputScale(sourceWidth: number, sourceHeight: number, requestedScale: number, maximumWidth?: number, maximumPixels?: number): number {
+    const widthScale = maximumWidth ? maximumWidth / sourceWidth : Number.POSITIVE_INFINITY;
+    const pixelScale = maximumPixels ? Math.sqrt(maximumPixels / (sourceWidth * sourceHeight)) : Number.POSITIVE_INFINITY;
+    return Math.min(requestedScale, widthScale, pixelScale);
+  }
+
+  private async decodeImage(image: Blob): Promise<DecodedImage> {
+    let bitmapError: unknown;
+    try {
+      const bitmap = await createImageBitmap(image);
+      return { source: bitmap, width: bitmap.width, height: bitmap.height, release: () => bitmap.close() };
+    } catch (error: unknown) {
+      bitmapError = error;
+    }
+    let imageError: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const url = URL.createObjectURL(image);
+      const element = new Image();
+      try {
+        const loaded = new Promise<void>((resolve, reject) => {
+          element.onload = () => resolve();
+          element.onerror = () => reject(new Error('The browser image element reported a load failure.'));
+        });
+        element.src = url;
+        await loaded;
+        // Some mobile browsers display an image successfully but reject decode().
+        // A load event with dimensions is sufficient for Canvas rendering.
+        try {
+          await element.decode();
+        } catch {
+          // Use the successfully loaded image element as the Canvas source.
+        }
+        if (!element.naturalWidth || !element.naturalHeight) {
+          throw new Error('The source image has no decodable dimensions.');
+        }
+        return {
+          source: element,
+          width: element.naturalWidth,
+          height: element.naturalHeight,
+          release: () => URL.revokeObjectURL(url),
+        };
+      } catch (error: unknown) {
+        URL.revokeObjectURL(url);
+        imageError = error;
+      }
+    }
+    const details = [
+      `type=${image.type || 'unknown'}`,
+      `size=${Math.round(image.size / 1024)}KiB`,
+      `ImageBitmap=${this.errorMessage(bitmapError)}`,
+      `HTMLImage=${this.errorMessage(imageError)}`,
+    ].join(', ');
+    throw new Error(`Unable to decode the source image (${details}).`);
   }
 
   private deduplicateLines(lines: OcrLine[]): OcrLine[] {
@@ -687,9 +959,6 @@ export class App {
 
   private createJsonPayload() {
     const fields = this.fields();
-    const payloadSource = this.payloadExportSource();
-    const payloadKg = payloadSource === 'calculated' ? fields.calculatedPayloadKg : fields.payloadKg;
-    const payloadLb = payloadSource === 'calculated' ? fields.calculatedPayloadLb : fields.payloadLb;
     const warnings = this.diagnostics().map((diagnostic) => `${diagnostic.stage}: ${diagnostic.message}`);
     if (fields.containerId.value && !this.containerIdValid()) {
       warnings.push('Container ID does not pass ISO 6346 format and check-digit validation.');
@@ -706,7 +975,7 @@ export class App {
         isoCode: fields.isoCode,
         mpgm: { kg: fields.mpgmKg, lb: fields.mpgmLb },
         tare: { kg: fields.tareKg, lb: fields.tareLb },
-        payload: { source: payloadSource, kg: payloadKg, lb: payloadLb },
+        payload: { kg: fields.payloadKg, lb: fields.payloadLb },
         capacity: {
           liters: fields.capacityLiters,
           cubicMeters: fields.capacityCubicMeters,
@@ -737,8 +1006,6 @@ export class App {
       mpgmKg: { value: '', unit: 'KG' }, mpgmLb: { value: '', unit: 'LB' },
       tareKg: { value: '', unit: 'KG' }, tareLb: { value: '', unit: 'LB' },
       payloadKg: { value: '', unit: 'KG' }, payloadLb: { value: '', unit: 'LB' },
-      calculatedPayloadKg: { value: '', unit: 'KG', calculated: true },
-      calculatedPayloadLb: { value: '', unit: 'LB', calculated: true },
       capacityLiters: { value: '', unit: 'L' },
       capacityCubicMeters: { value: '', unit: 'CU.M.' },
       capacityCubicFeet: { value: '', unit: 'CU.FT.' },
@@ -747,7 +1014,10 @@ export class App {
     const find = (pattern: RegExp) => text.find((line) => pattern.test(line.normalized));
     const idLine = find(/[A-Z]{3}[UJZ][\s-]*\d{6}[\s-]*\d/);
     if (idLine) {
-      fields.containerId = { value: idLine.normalized.match(/[A-Z]{3}[UJZ][\s-]*\d{6}[\s-]*\d/)![0].replace(/[\s-]/g, ''), confidence: idLine.mean };
+      const value = idLine.normalized.match(/[A-Z]{3}[UJZ][\s-]*\d{6}[\s-]*\d/)![0].replace(/[\s-]/g, '');
+      if (this.validateContainerId(value)) {
+        fields.containerId = { value, confidence: idLine.mean };
+      }
     } else {
       const idFragments = text
         .map((line, index) => ({
@@ -831,16 +1101,18 @@ export class App {
       return undefined;
     };
     const capacityAfter = (label: RegExp, unit: RegExp) => {
-      const labelIndex = text.findIndex((line) => label.test(line.normalized));
-      if (labelIndex < 0) return undefined;
-      const nearby = text.slice(labelIndex, labelIndex + 4);
-      for (const line of nearby) {
-        const match = line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unit.source}`));
-        if (match) {
-          return { value: match[1].trim(), confidence: line.mean };
+      const candidates: Array<{ value: string; confidence: number }> = [];
+      for (let labelIndex = 0; labelIndex < text.length; labelIndex++) {
+        if (!label.test(text[labelIndex].normalized)) continue;
+        const nearby = text.slice(labelIndex, labelIndex + 4);
+        for (const line of nearby) {
+          const match = line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unit.source}`));
+          if (match) {
+            candidates.push({ value: match[1].trim(), confidence: line.mean });
+          }
         }
       }
-      return undefined;
+      return candidates.sort((first, second) => second.confidence - first.confidence)[0];
     };
     const mpgmKg = weightAfter(/\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT|\bMAX\.?\s*GR\.?/, 'KG');
     const mpgmLb = weightAfter(/\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT|\bMAX\.?\s*GR\.?/, 'LB');
@@ -857,14 +1129,12 @@ export class App {
     fields.tareKg = { value: tareKg?.value ?? '', unit: 'KG', confidence: tareKg?.confidence };
     fields.tareLb = { value: tareLb?.value ?? '', unit: 'LB', confidence: tareLb?.confidence };
     fields.payloadKg = payloadKg
-      ? { value: payloadKg.value, unit: 'KG', confidence: payloadKg.confidence, calculated: false }
+      ? { value: payloadKg.value, unit: 'KG', confidence: payloadKg.confidence }
       : { value: '', unit: 'KG' };
     fields.payloadLb = payloadLb
-      ? { value: payloadLb.value, unit: 'LB', confidence: payloadLb.confidence, calculated: false }
+      ? { value: payloadLb.value, unit: 'LB', confidence: payloadLb.confidence }
       : { value: '', unit: 'LB' };
     this.recoverMissingWeightRows(fields, text);
-    fields.calculatedPayloadKg = this.calculatePayload(fields.payloadKg, fields.mpgmKg, fields.tareKg, 'KG');
-    fields.calculatedPayloadLb = this.calculatePayload(fields.payloadLb, fields.mpgmLb, fields.tareLb, 'LB');
     fields.capacityLiters = { value: capacityLiters?.value ?? '', unit: 'L', confidence: capacityLiters?.confidence };
     fields.capacityCubicMeters = { value: capacityCubicMeters?.value ?? '', unit: 'CU.M.', confidence: capacityCubicMeters?.confidence };
     fields.capacityCubicFeet = { value: capacityCubicFeet?.value ?? '', unit: 'CU.FT.', confidence: capacityCubicFeet?.confidence };
@@ -892,27 +1162,14 @@ export class App {
       .sort((first, second) => Number.isNaN(first.y) || Number.isNaN(second.y) ? 0 : first.y - second.y);
     const recover = (row: typeof unlabeledRows[number] | undefined, key: 'tareKg' | 'payloadKg', match: RegExpMatchArray | null) => {
       if (row && match && !fields[key].value) {
-        fields[key] = { value: match[1].trim(), unit: 'KG', confidence: row.line.mean, inferred: true, calculated: false };
+        fields[key] = { value: match[1].trim(), unit: 'KG', confidence: row.line.mean, inferred: true };
       }
     };
     recover(unlabeledRows[0], 'tareKg', unlabeledRows[0]?.kg ?? null);
     if (unlabeledRows[0]?.lb && !fields.tareLb.value) fields.tareLb = { value: unlabeledRows[0].lb[1].trim(), unit: 'LB', confidence: unlabeledRows[0].line.mean, inferred: true };
     const payloadRow = unlabeledRows[1];
     recover(payloadRow, 'payloadKg', payloadRow?.kg ?? null);
-    if (payloadRow?.lb && !fields.payloadLb.value) fields.payloadLb = { value: payloadRow.lb[1].trim(), unit: 'LB', confidence: payloadRow.line.mean, inferred: true, calculated: false };
-  }
-
-  private calculatePayload(payload: ContainerField, mpgm: ContainerField, tare: ContainerField, unit: 'KG' | 'LB'): ContainerField {
-    if (!payload.value || !mpgm.value || !tare.value) {
-      return { value: '', unit, calculated: true };
-    }
-    const parseWeight = (value: string) => Number(value.replace(/[ ,.]/g, ''));
-    const mpgmValue = parseWeight(mpgm.value);
-    const tareValue = parseWeight(tare.value);
-    if (!Number.isFinite(mpgmValue) || !Number.isFinite(tareValue) || mpgmValue < tareValue) {
-      return { value: '', unit, calculated: true };
-    }
-    return { value: String(mpgmValue - tareValue), unit, calculated: true };
+    if (payloadRow?.lb && !fields.payloadLb.value) fields.payloadLb = { value: payloadRow.lb[1].trim(), unit: 'LB', confidence: payloadRow.line.mean, inferred: true };
   }
 
   private validateContainerId(value: string): boolean {

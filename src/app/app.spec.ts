@@ -14,11 +14,11 @@ describe('App', () => {
     expect(app).toBeTruthy();
   });
 
-  it('should render the OCR workspace', async () => {
+  it('should render the OCR workspace without panel headings', async () => {
     const fixture = TestBed.createComponent(App);
     await fixture.whenStable();
     const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('#capture-title')?.textContent).toContain('Container side photo');
+    expect(compiled.querySelector('.panel-heading')).toBeNull();
     expect(compiled.querySelector('input[type="file"]')?.getAttribute('capture')).toBeNull();
   });
 
@@ -42,20 +42,172 @@ describe('App', () => {
     expect(app.processingMode()).toBe('full-photo');
   });
 
+  it('should default to manual crop and render both capture mode choices', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      captureMode: () => string;
+    };
+    fixture.detectChanges();
+
+    const radios = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLInputElement>('input[name="capture-mode"]'));
+
+    expect(app.captureMode()).toBe('manual-crop');
+    expect(radios.map((radio) => radio.value)).toEqual(['manual-crop', 'auto-crop']);
+    expect(radios[0].checked).toBe(true);
+  });
+
+  it('should not start automatic OCR when a manual-crop image is selected', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      captureMode: { set(value: string): void };
+      prepareInitialCrop: ReturnType<typeof vi.fn>;
+      useImage(image: Blob, name: string): void;
+    };
+    const createObjectUrl = vi.fn().mockReturnValue('blob:manual-crop');
+    vi.stubGlobal('URL', { createObjectURL: createObjectUrl, revokeObjectURL: vi.fn() });
+    app.captureMode.set('manual-crop');
+    app.prepareInitialCrop = vi.fn();
+
+    try {
+      app.useImage(new Blob(['image'], { type: 'image/jpeg' }), 'container.jpg');
+
+      expect(app.prepareInitialCrop).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('should retry a failed image preview with fresh object URLs', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      previewUrl: () => string | null;
+      diagnostics: () => Array<{ stage: string }>;
+      useImage(image: Blob, name: string): void;
+      retryPreview(failedUrl: string): void;
+    };
+    const createObjectUrl = vi.fn()
+      .mockReturnValueOnce('blob:preview-1')
+      .mockReturnValueOnce('blob:preview-2')
+      .mockReturnValueOnce('blob:preview-3');
+    const revokeObjectUrl = vi.fn();
+    vi.stubGlobal('URL', { createObjectURL: createObjectUrl, revokeObjectURL: revokeObjectUrl });
+
+    try {
+      app.useImage(new Blob(['image'], { type: 'image/jpeg' }), 'container.jpg');
+      app.retryPreview('blob:preview-1');
+      app.retryPreview('blob:preview-2');
+      app.retryPreview('blob:preview-3');
+
+      expect(createObjectUrl).toHaveBeenCalledTimes(3);
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:preview-1');
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:preview-2');
+      expect(app.previewUrl()).toBeNull();
+      expect(app.diagnostics().some((diagnostic) => diagnostic.stage === 'Image preview')).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('should clear OCR fields when choosing a new image', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       fields: { set(value: Record<string, { value: string }>): void; (): Record<string, { value: string }> };
       rawText: { set(value: string[]): void; (): string[] };
+      rawScans: { set(value: Array<{ label: string; lines: Array<{ text: string; confidence: number }> }>): void; (): Array<{ label: string; lines: Array<{ text: string; confidence: number }> }> };
       openFilePicker(): void;
     };
     app.fields.set({ containerId: { value: 'HCSU7997909' } });
     app.rawText.set(['HCSU 799790 9 (98%)']);
+    app.rawScans.set([{ label: 'Full photo', lines: [{ text: 'HCSU 799790 9', confidence: 98 }] }]);
 
     app.openFilePicker();
 
     expect(app.fields()['containerId'].value).toBe('');
     expect(app.rawText()).toEqual([]);
+    expect(app.rawScans()).toEqual([]);
+  });
+
+  it('should enable saving once an image is selected', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as { useImage(image: Blob, name: string): void };
+    vi.stubGlobal('URL', { createObjectURL: vi.fn().mockReturnValue('blob:selected-image'), revokeObjectURL: vi.fn() });
+
+    try {
+      app.useImage(new Blob(['image'], { type: 'image/jpeg' }), 'container.jpg');
+      fixture.detectChanges();
+
+      expect((fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.result-actions button')?.disabled).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('should create a display URL for a saved photo', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      hydrateSavedRecord(record: { id: string; savedAt: string; payload: unknown; image: Blob }): { imageUrl: string | null };
+    };
+    const createObjectUrl = vi.fn().mockReturnValue('blob:saved-photo');
+    vi.stubGlobal('URL', { createObjectURL: createObjectUrl });
+
+    try {
+      const record = app.hydrateSavedRecord({ id: 'record-1', savedAt: '2026-08-15T08:00:00.000Z', payload: {}, image: new Blob(['image'], { type: 'image/jpeg' }) });
+
+      expect(record.imageUrl).toBe('blob:saved-photo');
+      expect(createObjectUrl).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('should render saved records with JSON and delete controls', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      savedRecords: { set(records: Array<{ id: string; savedAt: string; payload: unknown; imageUrl: string | null }>): void };
+    };
+    app.savedRecords.set([{ id: 'record-1', savedAt: '2026-08-15T08:00:00.000Z', payload: { source: { fileName: 'container.jpg' } }, imageUrl: 'blob:saved-photo' }]);
+    fixture.detectChanges();
+
+    const savedResults = (fixture.nativeElement as HTMLElement).querySelector('.saved-results')!;
+    expect(savedResults.textContent).toContain('container.jpg');
+    expect(savedResults.textContent).toContain('View JSON');
+    expect(savedResults.textContent).toContain('Delete');
+  });
+
+  it('should render raw text grouped by OCR scan', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      rawScans: { set(value: Array<{ label: string; lines: Array<{ text: string; confidence: number }>; durationMs: number }>): void };
+    };
+    app.rawScans.set([
+      { label: 'Selected region', lines: [{ text: 'HCSU 799790 9', confidence: 98 }], durationMs: 320 },
+      { label: 'Selected region (2x)', lines: [{ text: 'TARE 3,650 KG', confidence: 94 }], durationMs: 480 },
+    ]);
+    fixture.detectChanges();
+
+    const panel = (fixture.nativeElement as HTMLElement).querySelector('.raw-text')!;
+    expect(panel.textContent).toContain('Selected region');
+    expect(panel.textContent).toContain('320 ms');
+    expect(panel.textContent).toContain('480 ms');
+    expect(panel.querySelectorAll('tbody tr')).toHaveLength(2);
+    expect(panel.textContent).toContain('98%');
+    expect(panel.textContent).not.toContain('(98%)');
+  });
+
+  it('should process the selected crop only after it is prepared', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      applyCrop(): Promise<boolean>;
+      processImage(): Promise<void>;
+      applyCropAndProcess(): Promise<void>;
+    };
+    app.applyCrop = vi.fn().mockResolvedValue(true);
+    app.processImage = vi.fn().mockResolvedValue(undefined);
+
+    await app.applyCropAndProcess();
+
+    expect(app.applyCrop).toHaveBeenCalled();
+    expect(app.processImage).toHaveBeenCalled();
   });
 
   it('should attach the camera stream after the video preview is rendered', async () => {
@@ -134,10 +286,152 @@ describe('App', () => {
     expect(app.diagnostics().some((diagnostic) => diagnostic.stage === 'Manual crop' && diagnostic.message === 'The selected region could not be prepared. Adjust the rectangle or choose the image again.')).toBe(true);
   });
 
+  it('should regenerate a failed selected-crop preview', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      cropRect: { set(value: { x: number; y: number; width: number; height: number }): void };
+      cropPreviewUrl: { set(value: string | null): void; (): string | null };
+      updateCropPreview: ReturnType<typeof vi.fn>;
+      retryCropPreview(url: string): Promise<void>;
+    };
+    const crop = { x: 0.2, y: 0.2, width: 0.3, height: 0.3 };
+    app.cropRect.set(crop);
+    app.cropPreviewUrl.set('blob:failed-crop');
+    app.updateCropPreview = vi.fn().mockImplementation(async () => app.cropPreviewUrl.set('blob:replacement-crop'));
+
+    await app.retryCropPreview('blob:failed-crop');
+
+    expect(app.updateCropPreview).toHaveBeenCalledWith(crop);
+    expect(app.cropPreviewUrl()).toBe('blob:replacement-crop');
+  });
+
+  it('should recreate local OCR once after a failed detection', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      getOcr: ReturnType<typeof vi.fn>;
+      detectWithRecovery(url: string, recovery: { retried: boolean }): Promise<string[]>;
+    };
+    const firstOcr = { detect: vi.fn().mockRejectedValue(new Error('stalled worker')) };
+    const replacementOcr = { detect: vi.fn().mockResolvedValue(['container text']) };
+    app.getOcr = vi.fn().mockResolvedValueOnce(firstOcr).mockResolvedValueOnce(replacementOcr);
+
+    await expect(app.detectWithRecovery('blob:crop', { retried: false })).resolves.toEqual(['container text']);
+
+    expect(firstOcr.detect).toHaveBeenCalledWith('blob:crop');
+    expect(replacementOcr.detect).toHaveBeenCalledWith('blob:crop');
+    expect(app.getOcr).toHaveBeenCalledTimes(2);
+  });
+
+  it('should use a loaded image element when bitmap and image decode fail', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      decodeImage(image: Blob): Promise<{ width: number; height: number; release(): void }>;
+    };
+    const createObjectUrl = vi.fn().mockReturnValue('blob:fallback-image');
+    const revokeObjectUrl = vi.fn();
+    const decode = vi.fn().mockRejectedValue(new Error('Image.decode is unsupported'));
+
+    vi.stubGlobal('createImageBitmap', vi.fn().mockRejectedValue(new Error('WebP bitmap decoding failed')));
+    vi.stubGlobal('URL', { createObjectURL: createObjectUrl, revokeObjectURL: revokeObjectUrl });
+    vi.stubGlobal('Image', class {
+      naturalWidth = 768;
+      naturalHeight = 768;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.());
+      }
+      decode = decode;
+    });
+
+    try {
+      const decoded = await app.decodeImage(new Blob(['image'], { type: 'image/webp' }));
+
+      expect(decode).toHaveBeenCalled();
+      expect(decoded.width).toBe(768);
+      expect(decoded.height).toBe(768);
+      decoded.release();
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:fallback-image');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('should retry source-image loading with a fresh object URL', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      decodeImage(image: Blob): Promise<{ width: number; height: number; release(): void }>;
+    };
+    const createObjectUrl = vi.fn().mockReturnValueOnce('blob:first-attempt').mockReturnValueOnce('blob:second-attempt');
+    const revokeObjectUrl = vi.fn();
+    let imageCount = 0;
+
+    vi.stubGlobal('createImageBitmap', vi.fn().mockRejectedValue(new Error('ImageBitmap unavailable')));
+    vi.stubGlobal('URL', { createObjectURL: createObjectUrl, revokeObjectURL: revokeObjectUrl });
+    vi.stubGlobal('Image', class {
+      naturalWidth = 640;
+      naturalHeight = 480;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor() {
+        imageCount++;
+      }
+      set src(_value: string) {
+        queueMicrotask(() => imageCount === 1 ? this.onerror?.() : this.onload?.());
+      }
+      decode = vi.fn().mockResolvedValue(undefined);
+    });
+
+    try {
+      const decoded = await app.decodeImage(new Blob(['image'], { type: 'image/jpeg' }));
+
+      expect(decoded.width).toBe(640);
+      expect(createObjectUrl).toHaveBeenCalledTimes(2);
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:first-attempt');
+      decoded.release();
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:second-attempt');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('should cap manual crop output dimensions by pixel budget', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      cropOutputScale(sourceWidth: number, sourceHeight: number, requestedScale: number, maximumWidth?: number, maximumPixels?: number): number;
+    };
+
+    expect(app.cropOutputScale(4_000, 3_000, 1, undefined, 4_000_000)).toBeCloseTo(Math.sqrt(1 / 3));
+    expect(app.cropOutputScale(2_000, 1_000, 2, undefined, 4_000_000)).toBeCloseTo(Math.sqrt(2));
+  });
+
+  it('should release every temporary OCR pass when pass preparation fails', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      releaseOcrPasses(passes: Array<{ url: string; revokeUrl: boolean }>): void;
+    };
+    const revokeObjectUrl = vi.fn();
+    vi.stubGlobal('URL', { revokeObjectURL: revokeObjectUrl });
+
+    try {
+      app.releaseOcrPasses([
+        { url: 'blob:first', revokeUrl: true },
+        { url: 'blob:source', revokeUrl: false },
+        { url: 'blob:second', revokeUrl: true },
+      ]);
+
+      expect(revokeObjectUrl).toHaveBeenCalledTimes(2);
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:first');
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:second');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('should extract tank container weights without inventing a payload', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
-      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string; calculated?: boolean }>;
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
     };
 
     const fields = app.extractFields([
@@ -160,16 +454,13 @@ describe('App', () => {
     expect(fields['tareLb'].value).toBe('8047');
     expect(fields['payloadKg'].value).toBe('');
     expect(fields['payloadLb'].value).toBe('');
-    expect(fields['calculatedPayloadKg'].value).toBe('');
-    expect(fields['calculatedPayloadLb'].value).toBe('');
-    expect(fields['payloadKg'].calculated).toBeUndefined();
     expect(fields['capacityLiters'].value).toBe('25,000');
   });
 
-  it('should preserve a printed payload instead of labeling it calculated', () => {
+  it('should preserve a printed payload', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
-      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string; calculated?: boolean }>;
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
     };
 
     const fields = app.extractFields([
@@ -179,9 +470,33 @@ describe('App', () => {
     ]);
 
     expect(fields['payloadKg'].value).toBe('32350');
-    expect(fields['payloadKg'].calculated).toBe(false);
-    expect(fields['calculatedPayloadKg'].value).toBe('32350');
-    expect(fields['calculatedPayloadKg'].calculated).toBe(true);
+  });
+
+  it('should preserve all detected capacity digits', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'CAPACITY 25.000L', mean: 0.99 },
+    ]);
+
+    expect(fields['capacityLiters'].value).toBe('25.000');
+  });
+
+  it('should prefer the highest-confidence capacity', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'CAPACITY 25,800 L', mean: 0.98 },
+      { text: 'CAPACITY 25,000 L', mean: 0.91 },
+    ]);
+
+    expect(fields['capacityLiters'].value).toBe('25,800');
   });
 
   it('should recognize common OCR variants of payload and capacity labels', () => {
@@ -229,7 +544,7 @@ describe('App', () => {
   it('should preserve a payload returned several OCR lines after its label', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
-      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string; calculated?: boolean }>;
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
     };
 
     const fields = app.extractFields([
@@ -244,7 +559,6 @@ describe('App', () => {
     ]);
 
     expect(fields['payloadKg'].value).toBe('32.350');
-    expect(fields['payloadKg'].calculated).toBe(false);
   });
 
   it('should select the TARE value closest to its label', () => {
@@ -285,7 +599,7 @@ describe('App', () => {
   it('should extract standard general-purpose container markings', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
-      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string; calculated?: boolean }>;
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
     };
 
     const fields = app.extractFields([
@@ -299,9 +613,6 @@ describe('App', () => {
     expect(fields['mpgmLb'].value).toBe('6.610');
     expect(fields['payloadKg'].value).toBe('2.440');
     expect(fields['payloadLb'].value).toBe('5.380');
-    expect(fields['payloadKg'].calculated).toBe(false);
-    expect(fields['calculatedPayloadKg'].value).toBe('2440');
-    expect(fields['calculatedPayloadLb'].value).toBe('5380');
     expect(fields['capacityCubicMeters'].value).toBe('4.6');
     expect(fields['capacityCubicFeet'].value).toBe('162');
   });
@@ -338,27 +649,68 @@ describe('App', () => {
     expect(bounds).toEqual({ left: 380, top: 100, right: 620, bottom: 210 });
   });
 
+  it('should propose a crop from an ID stem when the check digit is missing', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      suggestedMarkingBounds(lines: Array<{ text: string; mean: number; box?: number[][] }>, containerId: string): { left: number; top: number; right: number; bottom: number } | null;
+    };
+    const lines = [
+      { text: 'HCSU 799790', mean: 0.92, box: [[400, 100], [560, 100], [560, 125], [400, 125]] },
+      { text: 'MAX.GR. 30,480 KG', mean: 0.95, box: [[380, 150], [620, 150], [620, 175], [380, 175]] },
+      { text: 'TARE 3,780 KG', mean: 0.95, box: [[380, 185], [580, 185], [580, 210], [380, 210]] },
+    ];
+
+    expect(app.suggestedMarkingBounds(lines, '')).toEqual({ left: 380, top: 100, right: 636, bottom: 210 });
+  });
+
+  it('should propose a crop from an ID stem split across OCR regions', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      suggestedMarkingBounds(lines: Array<{ text: string; mean: number; box?: number[][] }>, containerId: string): { left: number; top: number; right: number; bottom: number } | null;
+    };
+    const lines = [
+      { text: 'HCSU', mean: 0.92, box: [[400, 100], [445, 100], [445, 125], [400, 125]] },
+      { text: '799790', mean: 0.9, box: [[450, 100], [560, 100], [560, 125], [450, 125]] },
+      { text: 'MAX.GR. 30,480 KG', mean: 0.95, box: [[380, 150], [620, 150], [620, 175], [380, 175]] },
+    ];
+
+    expect(app.suggestedMarkingBounds(lines, '')).toEqual({ left: 380, top: 100, right: 636, bottom: 175 });
+  });
+
+  it('should not populate an ID with an invalid check digit', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
+    };
+
+    expect(app.extractFields([{ text: 'HCSU 799790 8', mean: 0.95 }])['containerId'].value).toBe('');
+  });
+
   it('should replace the full-image draft with an ID-focused crop after initial detection', async () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       imageSelection: number;
       cropDraft: () => { x: number; y: number; width: number; height: number };
       automaticCropSuggested: () => boolean;
+      status: () => string;
       getOcr(): Promise<{ detect(url: string): Promise<Array<{ text: string; mean: number; box: number[][] }>> }>;
+      createCropPass(): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }>;
       createSuggestedCrop(lines: Array<{ text: string; mean: number; box: number[][] }>, containerId: string, image: Blob): Promise<{ x: number; y: number; width: number; height: number } | null>;
-      prepareInitialCrop(image: Blob, imageUrl: string, selection: number): Promise<void>;
+      prepareInitialCrop(image: Blob, selection: number): Promise<void>;
     };
     const focusedCrop = { x: 0.3, y: 0.2, width: 0.4, height: 0.35 };
     app.imageSelection = 1;
     app.getOcr = async () => ({
       detect: async () => [{ text: 'HCSU 799790 9', mean: 0.95, box: [[300, 100], [500, 100], [500, 130], [300, 130]] }],
     });
+    app.createCropPass = async () => ({ url: 'blob:full-photo', offsetX: 0, offsetY: 0, scale: 1, revokeUrl: true });
     app.createSuggestedCrop = async () => focusedCrop;
 
-    await app.prepareInitialCrop(new Blob(), 'blob:test', 1);
+    await app.prepareInitialCrop(new Blob(), 1);
 
     expect(app.cropDraft()).toEqual(focusedCrop);
     expect(app.automaticCropSuggested()).toBe(true);
+    expect(app.status()).toMatch(/markings below\. \(\d+ ms\)$/);
   });
 
 });
