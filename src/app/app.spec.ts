@@ -36,13 +36,51 @@ describe('App', () => {
     expect(compiled.querySelector('.source-actions')).toBeNull();
   });
 
-  it('should render empty field values by default', () => {
+  it('should leave the results data area empty before analysis', () => {
     const fixture = TestBed.createComponent(App);
     fixture.detectChanges();
 
     const compiled = fixture.nativeElement as HTMLElement;
-    const inputs = Array.from(compiled.querySelectorAll<HTMLInputElement>('.field-grid input:not([type="radio"])'));
-    expect(inputs.every((input) => input.value === '' && input.placeholder === '')).toBe(true);
+    expect(compiled.querySelector('.field-grid')).toBeNull();
+    expect(compiled.querySelector('.raw-text')).toBeNull();
+  });
+
+  it('should show only the detected gross and payload labels', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      analysisSuccessful: { set(value: boolean): void };
+      rawText: { set(value: string[]): void };
+      fields: { update(updater: (fields: Record<string, { value: string }>) => Record<string, { value: string }>): void };
+    };
+    app.analysisSuccessful.set(true);
+    app.rawText.set(['MGW 30,480 KG', 'NET 26,000 KG']);
+    app.fields.update((fields) => ({
+      ...fields,
+      mpgmKg: { ...fields['mpgmKg'], value: '30480' },
+      payloadKg: { ...fields['payloadKg'], value: '26000' },
+    }));
+    fixture.detectChanges();
+
+    const labels = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLLabelElement>('.weight-row label'));
+    expect(labels).toHaveLength(2);
+    expect(labels[0].textContent).toContain('MGW');
+    expect(labels[0].textContent).not.toContain('MPGM');
+    expect(labels[1].textContent).toContain('NET');
+    expect(labels[1].textContent).not.toContain('PAYLOAD');
+  });
+
+  it('should show only an empty Container ID field when analysis finds no fields', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      analysisSuccessful: { set(value: boolean): void };
+    };
+    app.analysisSuccessful.set(true);
+    fixture.detectChanges();
+
+    const labels = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLLabelElement>('.field-grid > label'));
+    expect(labels).toHaveLength(1);
+    expect(labels[0].textContent).toContain('Container ID');
+    expect(labels[0].querySelector('input')?.value).toBe('');
   });
 
   it('should default to an editable full-image crop and quick processing', () => {
@@ -201,8 +239,10 @@ describe('App', () => {
   it('should render raw text grouped by OCR scan', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
+      analysisSuccessful: { set(value: boolean): void };
       rawScans: { set(value: Array<{ label: string; lines: Array<{ text: string; confidence: number }>; durationMs: number }>): void };
     };
+    app.analysisSuccessful.set(true);
     app.rawScans.set([
       { label: 'Selected region', lines: [{ text: 'HCSU 799790 9', confidence: 98 }], durationMs: 320 },
       { label: 'Selected region (2x)', lines: [{ text: 'TARE 3,650 KG', confidence: 94 }], durationMs: 480 },

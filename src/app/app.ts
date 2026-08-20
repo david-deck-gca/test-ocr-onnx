@@ -88,6 +88,13 @@ export class App {
       net: /\bNET(?:\s*WEIGHT)?\b/.test(text),
     };
   });
+  protected readonly detectedWeightLabels = computed(() => {
+    const markings = this.detectedMarkings();
+    return {
+      gross: markings.mpgm ? 'MPGM' : markings.mgw ? 'MGW' : markings.maxGr ? 'MAX.GR.' : '',
+      payload: markings.payload ? 'PAYLOAD' : markings.net ? 'NET' : '',
+    };
+  });
 
   private stream: MediaStream | null = null;
   private readonly injector = inject(Injector);
