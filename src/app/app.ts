@@ -56,6 +56,7 @@ export class App {
   protected readonly processingMode = signal<ProcessingMode>('full-photo');
   protected readonly cameraOpen = signal(false);
   protected readonly processing = signal(false);
+  protected readonly analysisSuccessful = signal(false);
   protected readonly status = signal('Choose a container image to begin.');
   protected readonly diagnostics = signal<Diagnostic[]>([]);
   protected readonly rawText = signal<string[]>([]);
@@ -286,6 +287,7 @@ export class App {
       this.addDiagnostic('Image input', 'Choose or capture a photo before starting OCR.');
       return;
     }
+    this.analysisSuccessful.set(false);
     this.processing.set(true);
     this.diagnostics.set([]);
     this.automaticCropSuggested.set(false);
@@ -350,8 +352,10 @@ export class App {
       } else {
         this.status.set(`OCR complete. Found ${lines.length} text region${lines.length === 1 ? '' : 's'}. Review the fields before saving.`);
       }
+      this.analysisSuccessful.set(true);
       this.processing.set(false);
     } catch (error: unknown) {
+      this.analysisSuccessful.set(false);
       this.processing.set(false);
       this.addDiagnostic('ONNX OCR', 'Local OCR could not process this image.', this.errorMessage(error));
     }
@@ -456,6 +460,7 @@ export class App {
   }
 
   private clearFields(): void {
+    this.analysisSuccessful.set(false);
     this.fields.set({
       containerId: { value: '' },
       isoCode: { value: '' },
