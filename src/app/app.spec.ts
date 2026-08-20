@@ -240,19 +240,23 @@ describe('App', () => {
     expect(app.processImage).toHaveBeenCalled();
   });
 
-  it('should render only the Use selected region action in the crop editor', () => {
+  it('should render Use selected region and Save first in the results panel', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
-      previewUrl: { set(value: string | null): void };
-      cropEditorOpen: { set(value: boolean): void };
+      analysisSuccessful: { set(value: boolean): void };
     };
-    app.previewUrl.set('blob:container-image');
-    app.cropEditorOpen.set(true);
     fixture.detectChanges();
 
-    const buttons = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.crop-actions button'));
+    const results = (fixture.nativeElement as HTMLElement).querySelector('.results')!;
+    const buttons = Array.from(results.querySelectorAll<HTMLButtonElement>(':scope > .result-actions button'));
 
-    expect(buttons.map((button) => button.textContent?.trim())).toEqual(['Use selected region']);
+    expect(results.firstElementChild?.classList.contains('result-actions')).toBe(true);
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual(['Scan selected crop region']);
+
+    app.analysisSuccessful.set(true);
+    fixture.detectChanges();
+
+    expect(Array.from(results.querySelectorAll<HTMLButtonElement>(':scope > .result-actions button')).map((button) => button.textContent?.trim())).toEqual(['Scan selected crop region', 'Save']);
   });
 
   it('should lock the visible crop while OCR is processing and unlock it afterwards', () => {

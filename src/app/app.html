@@ -28,7 +28,6 @@
                 }
               </div>
             </div>
-            <div class="crop-actions"><button class="primary run-button" type="button" [disabled]="applyingCrop() || processing()" (click)="applyCropAndProcess()">Use selected region</button></div>
           </section>
         } @else {
           <figure class="image-preview"><img [src]="url" alt="Selected container" (error)="retryPreview(url)" /><figcaption>{{ sourceName() }}</figcaption></figure>
@@ -39,26 +38,26 @@
     </section>
 
     <section class="results" aria-label="Structured container data">
+      <div class="result-actions"><button class="capture-mode-button run-button" type="button" [disabled]="!hasImage() || applyingCrop() || processing()" (click)="applyCropAndProcess()">Scan selected crop region</button>@if (analysisSuccessful()) { <button class="capture-mode-button" type="button" [disabled]="!hasImage()" (click)="saveJsonToIndexedDb()">Save</button> }</div>
       <div class="field-grid">
-      <label class="wide container-id">Container ID<input [value]="fields().containerId.value" (input)="updateField('containerId', $any($event.target).value)" autocapitalize="characters" />@if (fields().containerId.value) { <small aria-live="polite" [class.valid]="containerIdValid()" [class.invalid]="!containerIdValid()">{{ containerIdValid() ? 'ISO 6346 check digit valid' : 'Check the ID or check digit' }}</small> }</label>
+      <label class="wide container-id">Container ID<span class="field-control"><input [value]="fields().containerId.value" (input)="updateField('containerId', $any($event.target).value)" autocapitalize="characters" />@if (fields().containerId.value) { <small aria-live="polite" [class.valid]="containerIdValid()" [class.invalid]="!containerIdValid()">{{ containerIdValid() ? 'ISO 6346 check digit valid' : 'Check the ID or check digit' }}</small> }</span></label>
       <label>ISO CODE<input [value]="fields().isoCode.value" (input)="updateField('isoCode', $any($event.target).value)" autocapitalize="characters" /></label>
       <div class="weight-row">
-        <label>@if (detectedMarkings().mpgm) { <u>MPGM</u> } @else { MPGM } / @if (detectedMarkings().mgw) { <u>MGW</u> } @else { MGW } / @if (detectedMarkings().maxGr) { <u>MAX.GR.</u> } @else { MAX.GR. }<input [value]="fields().mpgmKg.value" (input)="updateField('mpgmKg', $any($event.target).value)" /><span>KG</span></label>
-        <label>TARE<input [value]="fields().tareKg.value" (input)="updateField('tareKg', $any($event.target).value)" /><span>KG</span>@if (fields().tareKg.inferred) { <small>Inferred row</small> }</label>
-        <label>@if (detectedMarkings().payload) { <u>PAYLOAD</u> } @else { PAYLOAD } / @if (detectedMarkings().net) { <u>NET</u> } @else { NET }<input [value]="fields().payloadKg.value" (input)="updateField('payloadKg', $any($event.target).value)" /><span>KG</span>@if (fields().payloadKg.inferred) { <small>Inferred row</small> }</label>
+        <label>@if (detectedMarkings().mpgm) { <u>MPGM</u> } @else { MPGM } / @if (detectedMarkings().mgw) { <u>MGW</u> } @else { MGW } / @if (detectedMarkings().maxGr) { <u>MAX.GR.</u> } @else { MAX.GR. }<span class="field-control"><input [value]="fields().mpgmKg.value" (input)="updateField('mpgmKg', $any($event.target).value)" /><span>KG</span></span></label>
+        <label>TARE<span class="field-control"><input [value]="fields().tareKg.value" (input)="updateField('tareKg', $any($event.target).value)" /><span>KG</span></span>@if (fields().tareKg.inferred) { <small>Inferred row</small> }</label>
+        <label>@if (detectedMarkings().payload) { <u>PAYLOAD</u> } @else { PAYLOAD } / @if (detectedMarkings().net) { <u>NET</u> } @else { NET }<span class="field-control"><input [value]="fields().payloadKg.value" (input)="updateField('payloadKg', $any($event.target).value)" /><span>KG</span></span>@if (fields().payloadKg.inferred) { <small>Inferred row</small> }</label>
       </div>
       <div class="weight-row">
-        <label>@if (detectedMarkings().mpgm) { <u>MPGM</u> } @else { MPGM } / @if (detectedMarkings().mgw) { <u>MGW</u> } @else { MGW } / @if (detectedMarkings().maxGr) { <u>MAX.GR.</u> } @else { MAX.GR. }<input [value]="fields().mpgmLb.value" (input)="updateField('mpgmLb', $any($event.target).value)" /><span>LB</span></label>
-        <label>TARE<input [value]="fields().tareLb.value" (input)="updateField('tareLb', $any($event.target).value)" /><span>LB</span>@if (fields().tareLb.inferred) { <small>Inferred row</small> }</label>
-        <label>@if (detectedMarkings().payload) { <u>PAYLOAD</u> } @else { PAYLOAD } / @if (detectedMarkings().net) { <u>NET</u> } @else { NET }<input [value]="fields().payloadLb.value" (input)="updateField('payloadLb', $any($event.target).value)" /><span>LB</span>@if (fields().payloadLb.inferred) { <small>Inferred row</small> }</label>
+        <label>@if (detectedMarkings().mpgm) { <u>MPGM</u> } @else { MPGM } / @if (detectedMarkings().mgw) { <u>MGW</u> } @else { MGW } / @if (detectedMarkings().maxGr) { <u>MAX.GR.</u> } @else { MAX.GR. }<span class="field-control"><input [value]="fields().mpgmLb.value" (input)="updateField('mpgmLb', $any($event.target).value)" /><span>LB</span></span></label>
+        <label>TARE<span class="field-control"><input [value]="fields().tareLb.value" (input)="updateField('tareLb', $any($event.target).value)" /><span>LB</span></span>@if (fields().tareLb.inferred) { <small>Inferred row</small> }</label>
+        <label>@if (detectedMarkings().payload) { <u>PAYLOAD</u> } @else { PAYLOAD } / @if (detectedMarkings().net) { <u>NET</u> } @else { NET }<span class="field-control"><input [value]="fields().payloadLb.value" (input)="updateField('payloadLb', $any($event.target).value)" /><span>LB</span></span>@if (fields().payloadLb.inferred) { <small>Inferred row</small> }</label>
       </div>
       <div class="capacity-row">
-        <label>CAPACITY<input [value]="fields().capacityLiters.value" (input)="updateField('capacityLiters', $any($event.target).value)" /><span>L</span></label>
-        <label>CU.CAP.<input [value]="fields().capacityCubicMeters.value" (input)="updateField('capacityCubicMeters', $any($event.target).value)" /><span>CU.M.</span></label>
-        <label>CU.CAP.<input [value]="fields().capacityCubicFeet.value" (input)="updateField('capacityCubicFeet', $any($event.target).value)" /><span>CU.FT.</span></label>
+        <label>CAPACITY<span class="field-control"><input [value]="fields().capacityLiters.value" (input)="updateField('capacityLiters', $any($event.target).value)" /><span>L</span></span></label>
+        <label>CU.CAP.<span class="field-control"><input [value]="fields().capacityCubicMeters.value" (input)="updateField('capacityCubicMeters', $any($event.target).value)" /><span>CU.M.</span></span></label>
+        <label>CU.CAP.<span class="field-control"><input [value]="fields().capacityCubicFeet.value" (input)="updateField('capacityCubicFeet', $any($event.target).value)" /><span>CU.FT.</span></span></label>
       </div>
       </div>
-      <div class="result-actions"><button class="secondary" type="button" [disabled]="!hasImage()" (click)="saveJsonToIndexedDb()">Save</button></div>
     <div class="raw-text"><h3>Raw detected text</h3>@if (rawScans().length) { <div class="raw-scans">@for (scan of rawScans(); track scan.label) { <section><div class="raw-scan-heading"><strong>{{ scan.label }}</strong><span>{{ scan.durationMs }} ms</span></div>@if (scan.lines.length) { <table [attr.aria-label]="'Detected text for ' + scan.label"><thead><tr><th>Text</th><th>Confidence</th></tr></thead><tbody>@for (line of scan.lines; track line.text) { <tr><td>{{ line.text }}</td><td>{{ line.confidence }}%</td></tr> }</tbody></table> } @else { <p>No text detected.</p> }</section> }</div> } @else { <p>Detected lines will be retained here with the exported record.</p> }</div>
     </section>
   </section>
