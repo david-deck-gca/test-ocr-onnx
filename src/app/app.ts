@@ -91,6 +91,7 @@ export class App {
     capacityCubicFeet: { value: '', unit: 'CU.FT.' },
   });
   protected readonly containerIdValid = computed(() => this.validateContainerId(this.fields().containerId.value));
+  protected readonly formattedContainerId = computed(() => this.formatContainerId(this.fields().containerId.value));
   protected readonly hasImage = computed(() => this.previewUrl() !== null);
   protected readonly detectedMarkings = computed(() => {
     const text = this.rawText().join('\n').toUpperCase();
@@ -293,10 +294,11 @@ export class App {
   }
 
   protected updateField(key: FieldKey, value: string): void {
+    const fieldValue = key === 'containerId' ? value.replace(/[^A-Z0-9]/gi, '').toUpperCase() : value;
     this.fields.update((fields) => {
       const updated = {
         ...fields,
-        [key]: { ...fields[key], value },
+        [key]: { ...fields[key], value: fieldValue },
       };
       return updated;
     });
@@ -1129,6 +1131,13 @@ export class App {
     const payloadRow = unlabeledRows[1];
     recover(payloadRow, 'payloadKg', payloadRow?.kg ?? null);
     if (payloadRow?.lb && !fields.payloadLb.value) fields.payloadLb = { value: payloadRow.lb[1].trim(), unit: 'LB', confidence: payloadRow.line.mean, inferred: true };
+  }
+
+  private formatContainerId(value: string): string {
+    const normalized = value.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    return [normalized.slice(0, 4), normalized.slice(4, 10), normalized.slice(10, 11)]
+      .filter(Boolean)
+      .join(' ');
   }
 
   private validateContainerId(value: string): boolean {
