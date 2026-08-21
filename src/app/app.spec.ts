@@ -94,7 +94,7 @@ describe('App', () => {
     expect(app.processingMode()).toBe('full-photo');
   });
 
-  it('should default to a pressed Manual crop-mode button', () => {
+  it('should default to a pressed Auto crop-mode button outside Android and iOS', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       captureMode: () => string;
@@ -103,19 +103,19 @@ describe('App', () => {
 
     const buttons = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.capture-mode .capture-mode-button'));
 
-    expect(app.captureMode()).toBe('manual-crop');
-    expect(buttons.map((button) => button.textContent?.trim())).toEqual(['Manual', 'Auto']);
-    expect(buttons[0].getAttribute('aria-pressed')).toBe('true');
-    expect(buttons[1].getAttribute('aria-pressed')).toBe('false');
-    expect(buttons[1].classList.contains('active')).toBe(false);
-
-    buttons[1].click();
-    fixture.detectChanges();
-
     expect(app.captureMode()).toBe('auto-crop');
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual(['Manual', 'Auto']);
     expect(buttons[0].getAttribute('aria-pressed')).toBe('false');
     expect(buttons[1].getAttribute('aria-pressed')).toBe('true');
     expect(buttons[1].classList.contains('active')).toBe(true);
+
+    buttons[0].click();
+    fixture.detectChanges();
+
+    expect(app.captureMode()).toBe('manual-crop');
+    expect(buttons[0].getAttribute('aria-pressed')).toBe('true');
+    expect(buttons[1].getAttribute('aria-pressed')).toBe('false');
+    expect(buttons[0].classList.contains('active')).toBe(true);
   });
 
   it('should not start automatic OCR when a manual-crop image is selected', () => {
@@ -144,6 +144,7 @@ describe('App', () => {
     const app = fixture.componentInstance as unknown as {
       previewUrl: () => string | null;
       diagnostics: () => Array<{ stage: string }>;
+      captureMode: { set(value: string): void };
       useImage(image: Blob, name: string): void;
       retryPreview(failedUrl: string): void;
     };
@@ -155,6 +156,7 @@ describe('App', () => {
     vi.stubGlobal('URL', { createObjectURL: createObjectUrl, revokeObjectURL: revokeObjectUrl });
 
     try {
+      app.captureMode.set('manual-crop');
       app.useImage(new Blob(['image'], { type: 'image/jpeg' }), 'container.jpg');
       app.retryPreview('blob:preview-1');
       app.retryPreview('blob:preview-2');
@@ -191,10 +193,14 @@ describe('App', () => {
 
   it('should enable saving once an image is selected', () => {
     const fixture = TestBed.createComponent(App);
-    const app = fixture.componentInstance as unknown as { useImage(image: Blob, name: string): void };
+    const app = fixture.componentInstance as unknown as {
+      captureMode: { set(value: string): void };
+      useImage(image: Blob, name: string): void;
+    };
     vi.stubGlobal('URL', { createObjectURL: vi.fn().mockReturnValue('blob:selected-image'), revokeObjectURL: vi.fn() });
 
     try {
+      app.captureMode.set('manual-crop');
       app.useImage(new Blob(['image'], { type: 'image/jpeg' }), 'container.jpg');
       fixture.detectChanges();
 

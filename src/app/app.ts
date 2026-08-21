@@ -22,6 +22,20 @@ const MAX_GUIDED_CROP_PIXELS = 2_000_000;
 const MAX_PREVIEW_RETRIES = 2;
 const OCR_PASS_TIMEOUT_MS = 45_000;
 
+function defaultCaptureMode(): CaptureMode {
+  if (typeof navigator === 'undefined') {
+    return 'manual-crop';
+  }
+
+  const userAgent = navigator.userAgent;
+  const isAndroid = /Android/i.test(userAgent);
+  // iPadOS can identify itself as macOS when requesting desktop sites.
+  const isIos = /iPad|iPhone|iPod/i.test(userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+  return isAndroid || isIos ? 'manual-crop' : 'auto-crop';
+}
+
 interface ContainerField {
   value: string;
   unit?: string;
@@ -52,7 +66,7 @@ export class App {
   protected readonly applyingCrop = signal(false);
   protected readonly automaticCropSuggested = signal(false);
   protected readonly cropResizeHandles: CropResizeHandle[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
-  protected readonly captureMode = signal<CaptureMode>('manual-crop');
+  protected readonly captureMode = signal<CaptureMode>(defaultCaptureMode());
   protected readonly processingMode = signal<ProcessingMode>('full-photo');
   protected readonly cameraOpen = signal(false);
   protected readonly processing = signal(false);
