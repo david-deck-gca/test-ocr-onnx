@@ -39,25 +39,21 @@
 
     <section class="results" aria-label="Structured container data">
       <div class="result-actions"><button class="capture-mode-button run-button" type="button" [disabled]="!hasImage() || applyingCrop() || processing()" (click)="applyCropAndProcess()">Scan selected crop region</button>@if (analysisSuccessful()) { <button class="capture-mode-button" type="button" [disabled]="!hasImage()" (click)="saveJsonToIndexedDb()">Save on this device</button> }</div>
-      @if (analysisSuccessful()) { <div class="field-grid">
-      <label class="wide container-id">Container ID<span class="field-control"><input [value]="fields().containerId.value" (input)="updateField('containerId', $any($event.target).value)" autocapitalize="characters" />@if (fields().containerId.value) { <small aria-live="polite" [class.valid]="containerIdValid()" [class.invalid]="!containerIdValid()">{{ containerIdValid() ? 'check digit valid' : 'Check the ID or check digit' }}</small> }</span></label>
-      @if (fields().isoCode.value) { <label>ISO CODE<input [value]="fields().isoCode.value" (input)="updateField('isoCode', $any($event.target).value)" autocapitalize="characters" /></label> }
-      @if (fields().mpgmKg.value || fields().tareKg.value || fields().payloadKg.value) { <div class="weight-row">
-        @if (fields().mpgmKg.value) { <label>{{ detectedWeightLabels().gross }}<span class="field-control"><input [value]="fields().mpgmKg.value" (input)="updateField('mpgmKg', $any($event.target).value)" /><span>KG</span></span></label> }
-        @if (fields().tareKg.value) { <label>TARE<span class="field-control"><input [value]="fields().tareKg.value" (input)="updateField('tareKg', $any($event.target).value)" /><span>KG</span></span>@if (fields().tareKg.inferred) { <small>Inferred row</small> }</label> }
-        @if (fields().payloadKg.value) { <label>{{ detectedWeightLabels().payload }}<span class="field-control"><input [value]="fields().payloadKg.value" (input)="updateField('payloadKg', $any($event.target).value)" /><span>KG</span></span>@if (fields().payloadKg.inferred) { <small>Inferred row</small> }</label> }
-      </div> }
-      @if (fields().mpgmLb.value || fields().tareLb.value || fields().payloadLb.value) { <div class="weight-row">
-        @if (fields().mpgmLb.value) { <label>{{ detectedWeightLabels().gross }}<span class="field-control"><input [value]="fields().mpgmLb.value" (input)="updateField('mpgmLb', $any($event.target).value)" /><span>LB</span></span></label> }
-        @if (fields().tareLb.value) { <label>TARE<span class="field-control"><input [value]="fields().tareLb.value" (input)="updateField('tareLb', $any($event.target).value)" /><span>LB</span></span>@if (fields().tareLb.inferred) { <small>Inferred row</small> }</label> }
-        @if (fields().payloadLb.value) { <label>{{ detectedWeightLabels().payload }}<span class="field-control"><input [value]="fields().payloadLb.value" (input)="updateField('payloadLb', $any($event.target).value)" /><span>LB</span></span>@if (fields().payloadLb.inferred) { <small>Inferred row</small> }</label> }
-      </div> }
-      @if (fields().capacityLiters.value || fields().capacityCubicMeters.value || fields().capacityCubicFeet.value) { <div class="capacity-row">
-        @if (fields().capacityLiters.value) { <label>CAPACITY<span class="field-control"><input [value]="fields().capacityLiters.value" (input)="updateField('capacityLiters', $any($event.target).value)" /><span>L</span></span></label> }
-        @if (fields().capacityCubicMeters.value) { <label>CU.CAP.<span class="field-control"><input [value]="fields().capacityCubicMeters.value" (input)="updateField('capacityCubicMeters', $any($event.target).value)" /><span>CU.M.</span></span></label> }
-        @if (fields().capacityCubicFeet.value) { <label>CU.CAP.<span class="field-control"><input [value]="fields().capacityCubicFeet.value" (input)="updateField('capacityCubicFeet', $any($event.target).value)" /><span>CU.FT.</span></span></label> }
-      </div> }
-      </div>
+      @if (analysisSuccessful()) { <table class="field-grid">
+        <tbody>
+          <tr class="container-id"><th scope="row">Container ID</th><td><input [value]="fields().containerId.value" (input)="updateField('containerId', $any($event.target).value)" autocapitalize="characters" /></td><td>@if (fields().containerId.value) { <span aria-live="polite" [class.valid]="containerIdValid()" [class.invalid]="!containerIdValid()">{{ containerIdValid() ? 'check digit valid' : 'Check the ID or check digit' }}</span> }</td></tr>
+          @if (fields().isoCode.value) { <tr><th scope="row">ISO CODE</th><td><input [value]="fields().isoCode.value" (input)="updateField('isoCode', $any($event.target).value)" autocapitalize="characters" /></td><td></td></tr> }
+          @if (fields().mpgmKg.value) { <tr><th scope="row">{{ detectedWeightLabels().gross }}</th><td><input [value]="fields().mpgmKg.value" (input)="updateField('mpgmKg', $any($event.target).value)" /></td><td>KG</td></tr> }
+          @if (fields().tareKg.value) { <tr><th scope="row">TARE</th><td><input [value]="fields().tareKg.value" (input)="updateField('tareKg', $any($event.target).value)" /></td><td>KG @if (fields().tareKg.inferred) { <small>Inferred row</small> }</td></tr> }
+          @if (fields().payloadKg.value) { <tr><th scope="row">{{ detectedWeightLabels().payload }}</th><td><input [value]="fields().payloadKg.value" (input)="updateField('payloadKg', $any($event.target).value)" /></td><td>KG @if (fields().payloadKg.inferred) { <small>Inferred row</small> }</td></tr> }
+          @if (fields().mpgmLb.value) { <tr><th scope="row">{{ detectedWeightLabels().gross }}</th><td><input [value]="fields().mpgmLb.value" (input)="updateField('mpgmLb', $any($event.target).value)" /></td><td>LB</td></tr> }
+          @if (fields().tareLb.value) { <tr><th scope="row">TARE</th><td><input [value]="fields().tareLb.value" (input)="updateField('tareLb', $any($event.target).value)" /></td><td>LB @if (fields().tareLb.inferred) { <small>Inferred row</small> }</td></tr> }
+          @if (fields().payloadLb.value) { <tr><th scope="row">{{ detectedWeightLabels().payload }}</th><td><input [value]="fields().payloadLb.value" (input)="updateField('payloadLb', $any($event.target).value)" /></td><td>LB @if (fields().payloadLb.inferred) { <small>Inferred row</small> }</td></tr> }
+          @if (fields().capacityLiters.value) { <tr class="capacity-row"><th scope="row">CAPACITY</th><td><input [value]="fields().capacityLiters.value" (input)="updateField('capacityLiters', $any($event.target).value)" /></td><td>L</td></tr> }
+          @if (fields().capacityCubicMeters.value) { <tr class="capacity-row"><th scope="row">CU.CAP.</th><td><input [value]="fields().capacityCubicMeters.value" (input)="updateField('capacityCubicMeters', $any($event.target).value)" /></td><td>CU.M.&nbsp;</td></tr> }
+          @if (fields().capacityCubicFeet.value) { <tr class="capacity-row"><th scope="row">CU.CAP.</th><td><input [value]="fields().capacityCubicFeet.value" (input)="updateField('capacityCubicFeet', $any($event.target).value)" /></td><td>CU.FT.</td></tr> }
+        </tbody>
+      </table>
     <div class="raw-text"><h3>Raw detected text</h3>@if (rawScans().length) { <div class="raw-scans">@for (scan of rawScans(); track scan.label) { <section><div class="raw-scan-heading"><strong>{{ scan.label }}</strong><span>{{ scan.durationMs }} ms</span></div>@if (scan.lines.length) { <table [attr.aria-label]="'Detected text for ' + scan.label"><thead><tr><th>Text</th><th>Confidence</th></tr></thead><tbody>@for (line of scan.lines; track line.text) { <tr><td>{{ line.text }}</td><td>{{ line.confidence }}%</td></tr> }</tbody></table> } @else { <p>No text detected.</p> }</section> }</div> } @else { <p>Detected lines will be retained here with the exported record.</p> }</div> }
     </section>
   </section>
