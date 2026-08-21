@@ -144,7 +144,9 @@ describe('App', () => {
     }));
     fixture.detectChanges();
 
-    expect((fixture.nativeElement as HTMLElement).querySelector('.container-id td:last-child')?.textContent).toBe('check digit valid');
+    const validation = (fixture.nativeElement as HTMLElement).querySelector('.container-id td:last-child span');
+    expect(validation?.textContent).toBe('✓');
+    expect(validation?.getAttribute('aria-label')).toBe('ISO 6346 check digit valid');
     expect((fixture.nativeElement as HTMLElement).querySelector('.capacity-row td:last-child')?.textContent).toBe('CU.M.\u00a0');
   });
 
