@@ -38,7 +38,7 @@
     </section>
 
     <section class="results" aria-label="Structured container data">
-      <div class="result-actions"><button class="capture-mode-button run-button" type="button" [disabled]="!hasImage() || applyingCrop() || processing()" (click)="applyCropAndProcess()">Scan selected crop region</button>@if (analysisSuccessful()) { <button class="capture-mode-button" type="button" [disabled]="!hasImage()" (click)="saveJsonToIndexedDb()">Save</button> }</div>
+      <div class="result-actions"><button class="capture-mode-button run-button" type="button" [disabled]="!hasImage() || applyingCrop() || processing()" (click)="applyCropAndProcess()">Scan selected crop region</button>@if (analysisSuccessful()) { <button class="capture-mode-button" type="button" [disabled]="!hasImage()" (click)="saveJsonToIndexedDb()">Save on this device</button> }</div>
       @if (analysisSuccessful()) { <div class="field-grid">
       <label class="wide container-id">Container ID<span class="field-control"><input [value]="fields().containerId.value" (input)="updateField('containerId', $any($event.target).value)" autocapitalize="characters" />@if (fields().containerId.value) { <small aria-live="polite" [class.valid]="containerIdValid()" [class.invalid]="!containerIdValid()">{{ containerIdValid() ? 'check digit valid' : 'Check the ID or check digit' }}</small> }</span></label>
       @if (fields().isoCode.value) { <label>ISO CODE<input [value]="fields().isoCode.value" (input)="updateField('isoCode', $any($event.target).value)" autocapitalize="characters" /></label> }

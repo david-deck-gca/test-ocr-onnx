@@ -286,7 +286,7 @@ describe('App', () => {
     expect(app.processImage).toHaveBeenCalled();
   });
 
-  it('should render Use selected region and Save first in the results panel', () => {
+  it('should render Scan selected crop region and Save on this device first in the results panel', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       analysisSuccessful: { set(value: boolean): void };
@@ -302,7 +302,7 @@ describe('App', () => {
     app.analysisSuccessful.set(true);
     fixture.detectChanges();
 
-    expect(Array.from(results.querySelectorAll<HTMLButtonElement>(':scope > .result-actions button')).map((button) => button.textContent?.trim())).toEqual(['Scan selected crop region', 'Save']);
+    expect(Array.from(results.querySelectorAll<HTMLButtonElement>(':scope > .result-actions button')).map((button) => button.textContent?.trim())).toEqual(['Scan selected crop region', 'Save on this device']);
   });
 
   it('should lock the visible crop while OCR is processing and unlock it afterwards', () => {
