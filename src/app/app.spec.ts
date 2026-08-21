@@ -182,6 +182,26 @@ describe('App', () => {
     expect(rows[0].querySelector('input')?.value).toBe('');
   });
 
+  it('should display container IDs in ISO 6346 groups while storing a canonical value', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      analysisSuccessful: { set(value: boolean): void };
+      fields: { update(updater: (fields: Record<string, { value: string }>) => Record<string, { value: string }>): void; (): Record<string, { value: string }> };
+      updateField(key: string, value: string): void;
+    };
+    app.analysisSuccessful.set(true);
+    app.fields.update((fields) => ({
+      ...fields,
+      containerId: { ...fields['containerId'], value: 'HCSU7997909' },
+    }));
+    fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('.container-id input')?.value).toBe('HCSU 799790 9');
+
+    app.updateField('containerId', 'HCSU 799790 9');
+    expect(app.fields()['containerId'].value).toBe('HCSU7997909');
+  });
+
   it('should default to an editable full-image crop and quick processing', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
