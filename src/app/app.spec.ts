@@ -61,12 +61,89 @@ describe('App', () => {
     }));
     fixture.detectChanges();
 
-    const labels = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLLabelElement>('.weight-row label'));
-    expect(labels).toHaveLength(2);
-    expect(labels[0].textContent).toContain('MGW');
-    expect(labels[0].textContent).not.toContain('MPGM');
-    expect(labels[1].textContent).toContain('NET');
-    expect(labels[1].textContent).not.toContain('PAYLOAD');
+    const labels = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLTableRowElement>('.field-grid tbody tr'));
+    expect(labels).toHaveLength(3);
+    expect(labels[1].textContent).toContain('MGW');
+    expect(labels[1].textContent).not.toContain('MPGM');
+    expect(labels[2].textContent).toContain('NET');
+    expect(labels[2].textContent).not.toContain('PAYLOAD');
+  });
+
+  it('should group weight rows by label before unit', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      analysisSuccessful: { set(value: boolean): void };
+      rawText: { set(value: string[]): void };
+      fields: { update(updater: (fields: Record<string, { value: string }>) => Record<string, { value: string }>): void };
+    };
+    app.analysisSuccessful.set(true);
+    app.rawText.set(['MGW', 'NET']);
+    app.fields.update((fields) => ({
+      ...fields,
+      mpgmKg: { ...fields['mpgmKg'], value: '30480' },
+      mpgmLb: { ...fields['mpgmLb'], value: '67200' },
+      tareKg: { ...fields['tareKg'], value: '2230' },
+      tareLb: { ...fields['tareLb'], value: '4920' },
+      payloadKg: { ...fields['payloadKg'], value: '28250' },
+      payloadLb: { ...fields['payloadLb'], value: '62280' },
+    }));
+    fixture.detectChanges();
+
+    const rows = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLTableRowElement>('.field-grid tbody tr')).slice(1);
+    expect(rows.map((row) => row.querySelector('th')?.textContent?.trim())).toEqual(['MGW', 'MGW', 'TARE', 'TARE', 'NET', 'NET']);
+    expect(rows.map((row) => row.querySelector('td:last-child')?.textContent?.trim())).toEqual(['KG', 'LB', 'KG', 'LB', 'KG', 'LB']);
+  });
+
+  it('should render the cubic-metre unit with a trailing non-breaking space', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      analysisSuccessful: { set(value: boolean): void };
+      fields: { update(updater: (fields: Record<string, { value: string }>) => Record<string, { value: string }>): void };
+    };
+    app.analysisSuccessful.set(true);
+    app.fields.update((fields) => ({
+      ...fields,
+      capacityCubicMeters: { ...fields['capacityCubicMeters'], value: '67.5' },
+    }));
+    fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).querySelector('.capacity-row td:last-child')?.textContent).toBe('CU.M.\u00a0');
+  });
+
+  it('should render validation and units in the table unit column', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      analysisSuccessful: { set(value: boolean): void };
+      fields: { update(updater: (fields: Record<string, { value: string }>) => Record<string, { value: string }>): void };
+    };
+    app.analysisSuccessful.set(true);
+    app.fields.update((fields) => ({
+      ...fields,
+      containerId: { ...fields['containerId'], value: 'HCSU7997909' },
+      capacityCubicMeters: { ...fields['capacityCubicMeters'], value: '67.5' },
+    }));
+    fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).querySelector('.container-id td:last-child')?.textContent).toBe('check digit valid');
+    expect((fixture.nativeElement as HTMLElement).querySelector('.capacity-row td:last-child')?.textContent).toBe('CU.M.\u00a0');
+  });
+
+  it('should leave the ISO code unit column empty', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      analysisSuccessful: { set(value: boolean): void };
+      fields: { update(updater: (fields: Record<string, { value: string }>) => Record<string, { value: string }>): void };
+    };
+    app.analysisSuccessful.set(true);
+    app.fields.update((fields) => ({
+      ...fields,
+      isoCode: { ...fields['isoCode'], value: '22G1' },
+    }));
+    fixture.detectChanges();
+
+    const isoRow = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLTableRowElement>('.field-grid tbody tr'))
+      .find((row) => row.querySelector('th')?.textContent?.trim() === 'ISO CODE');
+    expect(isoRow?.querySelector('td:last-child')?.textContent).toBe('');
   });
 
   it('should show only an empty Container ID field when analysis finds no fields', () => {
@@ -77,10 +154,10 @@ describe('App', () => {
     app.analysisSuccessful.set(true);
     fixture.detectChanges();
 
-    const labels = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLLabelElement>('.field-grid > label'));
-    expect(labels).toHaveLength(1);
-    expect(labels[0].textContent).toContain('Container ID');
-    expect(labels[0].querySelector('input')?.value).toBe('');
+    const rows = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLTableRowElement>('.field-grid tbody tr'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].querySelector('th')?.textContent).toContain('Container ID');
+    expect(rows[0].querySelector('input')?.value).toBe('');
   });
 
   it('should default to an editable full-image crop and quick processing', () => {
