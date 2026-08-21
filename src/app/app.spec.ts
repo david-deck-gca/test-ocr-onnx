@@ -90,8 +90,9 @@ describe('App', () => {
     fixture.detectChanges();
 
     const rows = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLTableRowElement>('.field-grid tbody tr')).slice(1);
-    expect(rows.map((row) => row.querySelector('th')?.textContent?.trim())).toEqual(['MGW', 'MGW', 'TARE', 'TARE', 'NET', 'NET']);
+    expect(rows.map((row) => row.querySelector('th')?.textContent?.trim())).toEqual(['MGW', '', 'TARE', '', 'NET', '']);
     expect(rows.map((row) => row.querySelector('td:last-child')?.textContent?.trim())).toEqual(['KG', 'LB', 'KG', 'LB', 'KG', 'LB']);
+    expect(rows[1].querySelector('input')?.getAttribute('aria-label')).toBe('MGW LB');
   });
 
   it('should render the cubic-metre unit with a trailing non-breaking space', () => {
@@ -108,6 +109,25 @@ describe('App', () => {
     fixture.detectChanges();
 
     expect((fixture.nativeElement as HTMLElement).querySelector('.capacity-row td:last-child')?.textContent).toBe('CU.M.\u00a0');
+  });
+
+  it('should display the cubic-capacity label only on the first cubic-capacity row', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      analysisSuccessful: { set(value: boolean): void };
+      fields: { update(updater: (fields: Record<string, { value: string }>) => Record<string, { value: string }>): void };
+    };
+    app.analysisSuccessful.set(true);
+    app.fields.update((fields) => ({
+      ...fields,
+      capacityCubicMeters: { ...fields['capacityCubicMeters'], value: '67.5' },
+      capacityCubicFeet: { ...fields['capacityCubicFeet'], value: '2384' },
+    }));
+    fixture.detectChanges();
+
+    const rows = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLTableRowElement>('.capacity-row'));
+    expect(rows.map((row) => row.querySelector('th')?.textContent?.trim())).toEqual(['CU.CAP.', '']);
+    expect(rows[1].querySelector('input')?.getAttribute('aria-label')).toBe('CU.CAP. CU.FT.');
   });
 
   it('should render validation and units in the table unit column', () => {
