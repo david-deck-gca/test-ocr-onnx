@@ -359,6 +359,14 @@ describe('App', () => {
     expect(savedResults.textContent).toContain('container.jpg');
     expect(savedResults.textContent).toContain('View JSON');
     expect(savedResults.textContent).toContain('Delete');
+    expect(savedResults.querySelector<HTMLButtonElement>('.delete-all-button')?.disabled).toBe(false);
+  });
+
+  it('should disable deleting all saved results when none exist', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.delete-all-button')?.disabled).toBe(true);
   });
 
   it('should render raw text grouped by OCR scan', () => {

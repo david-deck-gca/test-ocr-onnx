@@ -439,6 +439,31 @@ export class App {
     }
   }
 
+  protected async deleteAllSavedRecords(): Promise<void> {
+    if (!window.confirm('Delete all saved results from this device?')) {
+      return;
+    }
+    try {
+      const database = await this.openSavedRecordsDatabase();
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction('records', 'readwrite');
+        transaction.objectStore('records').clear();
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+      });
+      database.close();
+      for (const record of this.savedRecords()) {
+        if (record.imageUrl) URL.revokeObjectURL(record.imageUrl);
+      }
+      this.savedRecords.set([]);
+      this.savedJson.set(null);
+      this.status.set('All saved results deleted.');
+    } catch (error: unknown) {
+      this.addDiagnostic('IndexedDB', 'Saved results could not be deleted.', this.errorMessage(error));
+    }
+  }
+
   protected dismissDiagnostics(): void {
     this.diagnostics.set([]);
   }
