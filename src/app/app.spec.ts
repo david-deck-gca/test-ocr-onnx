@@ -365,17 +365,21 @@ describe('App', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       analysisSuccessful: { set(value: boolean): void };
+      cropRect: { set(value: { x: number; y: number; width: number; height: number } | null): void };
       rawScans: { set(value: Array<{ label: string; lines: Array<{ text: string; confidence: number }>; durationMs: number }>): void };
     };
     app.analysisSuccessful.set(true);
+    app.cropRect.set({ x: 0.2, y: 0.3, width: 0.4, height: 0.2 });
     app.rawScans.set([
-      { label: 'Selected region', lines: [{ text: 'HCSU 799790 9', confidence: 98 }], durationMs: 320 },
-      { label: 'Selected region (2x)', lines: [{ text: 'TARE 3,650 KG', confidence: 94 }], durationMs: 480 },
+      { label: 'Original size', lines: [{ text: 'HCSU 799790 9', confidence: 98 }], durationMs: 320 },
+      { label: '2x max enlarged', lines: [{ text: 'TARE 3,650 KG', confidence: 94 }], durationMs: 480 },
     ]);
     fixture.detectChanges();
 
     const panel = (fixture.nativeElement as HTMLElement).querySelector('.raw-text')!;
-    expect(panel.textContent).toContain('Selected region');
+    expect(panel.textContent).toContain('Detected text: selected region');
+    expect(panel.textContent).toContain('Original size');
+    expect(panel.textContent).toContain('2x max enlarged');
     expect(panel.textContent).toContain('320 ms');
     expect(panel.textContent).toContain('480 ms');
     expect(panel.querySelectorAll('tbody tr')).toHaveLength(2);
