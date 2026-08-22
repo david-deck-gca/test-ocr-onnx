@@ -377,7 +377,7 @@ describe('App', () => {
     fixture.detectChanges();
 
     const panel = (fixture.nativeElement as HTMLElement).querySelector('.raw-text')!;
-    expect(panel.textContent).toContain('Detected text: selected region');
+    expect(panel.textContent).toContain('Raw detected text for selected region');
     expect(panel.textContent).toContain('Original size');
     expect(panel.textContent).toContain('2x max enlarged');
     expect(panel.textContent).toContain('320 ms');
