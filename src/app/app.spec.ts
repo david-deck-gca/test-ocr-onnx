@@ -380,14 +380,14 @@ describe('App', () => {
     app.cropRect.set({ x: 0.2, y: 0.3, width: 0.4, height: 0.2 });
     app.rawScans.set([
       { label: 'Original size', lines: [{ text: 'HCSU 799790 9', confidence: 98 }], durationMs: 320 },
-      { label: '2x max enlarged', lines: [{ text: 'TARE 3,650 KG', confidence: 94 }], durationMs: 480 },
+      { label: '1.4x enlarged', lines: [{ text: 'TARE 3,650 KG', confidence: 94 }], durationMs: 480 },
     ]);
     fixture.detectChanges();
 
     const panel = (fixture.nativeElement as HTMLElement).querySelector('.raw-text')!;
     expect(panel.textContent).toContain('RAW DETECTED TEXT FOR SELECTED REGION');
     expect(panel.textContent).toContain('Original size');
-    expect(panel.textContent).toContain('2x max enlarged');
+    expect(panel.textContent).toContain('1.4x enlarged');
     expect(panel.textContent).toContain('320 ms');
     expect(panel.textContent).toContain('480 ms');
     expect(panel.querySelectorAll('tbody tr')).toHaveLength(2);
@@ -622,6 +622,38 @@ describe('App', () => {
 
     expect(app.cropOutputScale(4_000, 3_000, 1, undefined, 4_000_000)).toBeCloseTo(Math.sqrt(1 / 3));
     expect(app.cropOutputScale(2_000, 1_000, 2, undefined, 4_000_000)).toBeCloseTo(Math.sqrt(2));
+  });
+
+  it('should reduce the crop pixel budget when available heap is low', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      runtimeCropPixelBudget(configuredMaximumPixels?: number): number | undefined;
+    };
+
+    vi.stubGlobal('performance', {
+      memory: { usedJSHeapSize: 192_000_000, jsHeapSizeLimit: 256_000_000 },
+    });
+
+    try {
+      expect(app.runtimeCropPixelBudget(2_000_000)).toBe(1_000_000);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('should retain the configured crop pixel budget when heap data is unavailable', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      runtimeCropPixelBudget(configuredMaximumPixels?: number): number | undefined;
+    };
+
+    vi.stubGlobal('performance', {});
+
+    try {
+      expect(app.runtimeCropPixelBudget(2_000_000)).toBe(2_000_000);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('should release every temporary OCR pass when pass preparation fails', () => {

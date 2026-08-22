@@ -21,6 +21,8 @@ const MAX_MANUAL_RETRY_CROP_PIXELS = 2_000_000;
 const MAX_GUIDED_CROP_PIXELS = 2_000_000;
 const MAX_PREVIEW_RETRIES = 2;
 const OCR_PASS_TIMEOUT_MS = 45_000;
+const CROP_MEMORY_HEADROOM = 0.25;
+const CROP_BYTES_PER_PIXEL = 16;
 
 function defaultCaptureMode(): CaptureMode {
   if (typeof navigator === 'undefined') {
@@ -653,8 +655,10 @@ export class App {
     if (manualCrop) {
       const passes: OcrPass[] = [];
       try {
-        passes.push({ label: 'Original size', ...await this.createCropPass(image, manualCrop, 1, undefined, MAX_MANUAL_CROP_PIXELS) });
-        passes.push({ label: '2x max enlarged', ...await this.createCropPass(image, manualCrop, 2, undefined, MAX_MANUAL_RETRY_CROP_PIXELS) });
+        const originalPass = await this.createCropPass(image, manualCrop, 1, undefined, MAX_MANUAL_CROP_PIXELS);
+        passes.push({ label: 'Original size', ...originalPass });
+        const enlargedPass = await this.createCropPass(image, manualCrop, 2, undefined, MAX_MANUAL_RETRY_CROP_PIXELS);
+        passes.push({ label: `${enlargedPass.scale.toFixed(1)}x enlarged`, ...enlargedPass });
         return passes;
       } catch (error: unknown) {
         this.releaseOcrPasses(passes);
@@ -681,7 +685,7 @@ export class App {
         const sourceY = Math.round(region.y * decodedImage.height);
         const sourceWidth = Math.min(decodedImage.width - sourceX, Math.round(region.width * decodedImage.width));
         const sourceHeight = Math.min(decodedImage.height - sourceY, Math.round(region.height * decodedImage.height));
-        const scale = this.cropOutputScale(sourceWidth, sourceHeight, 2, undefined, MAX_GUIDED_CROP_PIXELS);
+        const scale = this.cropOutputScale(sourceWidth, sourceHeight, 2, undefined, this.runtimeCropPixelBudget(MAX_GUIDED_CROP_PIXELS));
         const canvas = document.createElement('canvas');
         canvas.width = Math.max(1, Math.round(sourceWidth * scale));
         canvas.height = Math.max(1, Math.round(sourceHeight * scale));
@@ -857,7 +861,7 @@ export class App {
       const sourceY = Math.round(crop.y * decodedImage.height);
       const sourceWidth = Math.max(1, Math.round(crop.width * decodedImage.width));
       const sourceHeight = Math.max(1, Math.round(crop.height * decodedImage.height));
-      const outputScale = this.cropOutputScale(sourceWidth, sourceHeight, scale, maximumWidth, maximumPixels);
+      const outputScale = this.cropOutputScale(sourceWidth, sourceHeight, scale, maximumWidth, this.runtimeCropPixelBudget(maximumPixels));
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(sourceWidth * outputScale));
       canvas.height = Math.max(1, Math.round(sourceHeight * outputScale));
@@ -878,6 +882,20 @@ export class App {
     const widthScale = maximumWidth ? maximumWidth / sourceWidth : Number.POSITIVE_INFINITY;
     const pixelScale = maximumPixels ? Math.sqrt(maximumPixels / (sourceWidth * sourceHeight)) : Number.POSITIVE_INFINITY;
     return Math.min(requestedScale, widthScale, pixelScale);
+  }
+
+  private runtimeCropPixelBudget(configuredMaximumPixels?: number): number | undefined {
+    if (!configuredMaximumPixels || typeof performance === 'undefined') return configuredMaximumPixels;
+
+    const memory = (performance as Performance & { memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number } }).memory;
+    if (!memory || !Number.isFinite(memory.usedJSHeapSize) || !Number.isFinite(memory.jsHeapSizeLimit)) {
+      return configuredMaximumPixels;
+    }
+
+    // Keep most free heap available for the source image, OCR worker, and other transient buffers.
+    const availableBytes = Math.max(0, memory.jsHeapSizeLimit - memory.usedJSHeapSize);
+    const availablePixels = Math.max(1, Math.floor((availableBytes * CROP_MEMORY_HEADROOM) / CROP_BYTES_PER_PIXEL));
+    return Math.min(configuredMaximumPixels, availablePixels);
   }
 
   private async decodeImage(image: Blob): Promise<DecodedImage> {
