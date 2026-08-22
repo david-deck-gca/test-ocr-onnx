@@ -380,14 +380,14 @@ describe('App', () => {
     app.cropRect.set({ x: 0.2, y: 0.3, width: 0.4, height: 0.2 });
     app.rawScans.set([
       { label: 'Original size', lines: [{ text: 'HCSU 799790 9', confidence: 98 }], durationMs: 320 },
-      { label: '2x max enlarged', lines: [{ text: 'TARE 3,650 KG', confidence: 94 }], durationMs: 480 },
+      { label: '1.4x enlarged', lines: [{ text: 'TARE 3,650 KG', confidence: 94 }], durationMs: 480 },
     ]);
     fixture.detectChanges();
 
     const panel = (fixture.nativeElement as HTMLElement).querySelector('.raw-text')!;
     expect(panel.textContent).toContain('RAW DETECTED TEXT FOR SELECTED REGION');
     expect(panel.textContent).toContain('Original size');
-    expect(panel.textContent).toContain('2x max enlarged');
+    expect(panel.textContent).toContain('1.4x enlarged');
     expect(panel.textContent).toContain('320 ms');
     expect(panel.textContent).toContain('480 ms');
     expect(panel.querySelectorAll('tbody tr')).toHaveLength(2);

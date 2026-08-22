@@ -653,8 +653,10 @@ export class App {
     if (manualCrop) {
       const passes: OcrPass[] = [];
       try {
-        passes.push({ label: 'Original size', ...await this.createCropPass(image, manualCrop, 1, undefined, MAX_MANUAL_CROP_PIXELS) });
-        passes.push({ label: '2x max enlarged', ...await this.createCropPass(image, manualCrop, 2, undefined, MAX_MANUAL_RETRY_CROP_PIXELS) });
+        const originalPass = await this.createCropPass(image, manualCrop, 1, undefined, MAX_MANUAL_CROP_PIXELS);
+        passes.push({ label: 'Original size', ...originalPass });
+        const enlargedPass = await this.createCropPass(image, manualCrop, 2, undefined, MAX_MANUAL_RETRY_CROP_PIXELS);
+        passes.push({ label: `${enlargedPass.scale.toFixed(1)}x enlarged`, ...enlargedPass });
         return passes;
       } catch (error: unknown) {
         this.releaseOcrPasses(passes);
