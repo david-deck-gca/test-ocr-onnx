@@ -2,7 +2,6 @@ import { Component, ElementRef, Injector, afterNextRender, computed, inject, sig
 import Ocr from '@gutenye/ocr-browser';
 import * as ort from 'onnxruntime-web';
 
-type ProcessingMode = 'full-photo' | 'guided-crop';
 type CaptureMode = 'auto-crop' | 'manual-crop';
 type FieldKey = 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters' | 'capacityCubicMeters' | 'capacityCubicFeet';
 type OcrLine = { text: string; mean: number; box?: number[][] };
@@ -18,7 +17,6 @@ const DEFAULT_CROP: CropRect = { x: 0, y: 0, width: 1, height: 1 };
 const MAX_FULL_PHOTO_PIXELS = 4_000_000;
 const MAX_MANUAL_CROP_PIXELS = 4_000_000;
 const MAX_MANUAL_RETRY_CROP_PIXELS = 2_000_000;
-const MAX_GUIDED_CROP_PIXELS = 2_000_000;
 const MAX_PREVIEW_RETRIES = 2;
 const OCR_PASS_TIMEOUT_MS = 45_000;
 const CROP_MEMORY_HEADROOM = 0.25;
@@ -69,7 +67,6 @@ export class App {
   protected readonly automaticCropSuggested = signal(false);
   protected readonly cropResizeHandles: CropResizeHandle[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
   protected readonly captureMode = signal<CaptureMode>(defaultCaptureMode());
-  protected readonly processingMode = signal<ProcessingMode>('full-photo');
   protected readonly cameraOpen = signal(false);
   protected readonly processing = signal(false);
   protected readonly analysisSuccessful = signal(false);
@@ -269,10 +266,6 @@ export class App {
     this.cameraOpen.set(false);
   }
 
-  protected setMode(mode: ProcessingMode): void {
-    this.processingMode.set(mode);
-  }
-
   protected setCaptureMode(mode: CaptureMode): void {
     this.captureMode.set(mode);
   }
@@ -325,7 +318,7 @@ export class App {
     }
     try {
       this.status.set('Loading local PaddleOCR models...');
-      this.status.set(this.processingMode() === 'guided-crop' ? 'Preparing enlarged marking crops...' : 'Detecting painted text regions...');
+      this.status.set('Detecting painted text regions...');
       const passes = await this.createOcrPasses(image);
       const scanResults: OcrLine[][] = [];
       const recovery = { retried: false };
@@ -665,49 +658,7 @@ export class App {
         throw error;
       }
     }
-    if (this.processingMode() === 'full-photo') {
-      return [{ label: 'Full photo', ...await this.createCropPass(image, DEFAULT_CROP, 1, undefined, MAX_FULL_PHOTO_PIXELS) }];
-    }
-
-    const decodedImage = await this.decodeImage(image);
-    const enhancedPasses: OcrPass[] = [];
-    try {
-      enhancedPasses.push({ label: 'Full photo', ...await this.createCropPass(image, DEFAULT_CROP, 1, undefined, MAX_FULL_PHOTO_PIXELS) });
-      const overlap = 0.12;
-      const regions = [
-        { x: 0, y: 0, width: 0.5 + overlap, height: 0.5 + overlap },
-        { x: 0.5 - overlap, y: 0, width: 0.5 + overlap, height: 0.5 + overlap },
-        { x: 0, y: 0.5 - overlap, width: 0.5 + overlap, height: 0.5 + overlap },
-        { x: 0.5 - overlap, y: 0.5 - overlap, width: 0.5 + overlap, height: 0.5 + overlap },
-      ];
-      for (const [index, region] of regions.entries()) {
-        const sourceX = Math.round(region.x * decodedImage.width);
-        const sourceY = Math.round(region.y * decodedImage.height);
-        const sourceWidth = Math.min(decodedImage.width - sourceX, Math.round(region.width * decodedImage.width));
-        const sourceHeight = Math.min(decodedImage.height - sourceY, Math.round(region.height * decodedImage.height));
-        const scale = this.cropOutputScale(sourceWidth, sourceHeight, 2, undefined, this.runtimeCropPixelBudget(MAX_GUIDED_CROP_PIXELS));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(sourceWidth * scale));
-        canvas.height = Math.max(1, Math.round(sourceHeight * scale));
-        const context = canvas.getContext('2d');
-        if (!context) {
-          throw new Error('Canvas 2D context is unavailable.');
-        }
-        context.filter = 'contrast(145%) grayscale(100%)';
-        context.drawImage(decodedImage.source, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
-        const crop = await new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => {
-          if (blob) resolve(blob);
-          else reject(new Error('Guided crop could not be created.'));
-        }, 'image/png'));
-        enhancedPasses.push({ label: `Enhanced region ${index + 1}`, url: URL.createObjectURL(crop), offsetX: sourceX, offsetY: sourceY, scale, revokeUrl: true });
-      }
-      return enhancedPasses;
-    } catch (error: unknown) {
-      this.releaseOcrPasses(enhancedPasses);
-      throw error;
-    } finally {
-      decodedImage.release();
-    }
+    return [{ label: 'Full photo', ...await this.createCropPass(image, DEFAULT_CROP, 1, undefined, MAX_FULL_PHOTO_PIXELS) }];
   }
 
   private releaseOcrPasses(passes: OcrPass[]): void {
@@ -971,7 +922,6 @@ export class App {
       source: {
         fileName: this.sourceName(),
         processedAt: new Date().toISOString(),
-        processingMode: this.processingMode(),
         manualCrop: this.cropRect(),
       },
       container: {

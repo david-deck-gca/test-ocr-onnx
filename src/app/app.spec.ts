@@ -202,15 +202,13 @@ describe('App', () => {
     expect(app.fields()['containerId'].value).toBe('HCSU7997909');
   });
 
-  it('should default to an editable full-image crop and quick processing', () => {
+  it('should default to an editable full-image crop', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       cropDraft: () => { x: number; y: number; width: number; height: number };
-      processingMode: () => string;
     };
 
     expect(app.cropDraft()).toEqual({ x: 0, y: 0, width: 1, height: 1 });
-    expect(app.processingMode()).toBe('full-photo');
   });
 
   it('should default to a pressed Auto crop-mode button outside Android and iOS', () => {
