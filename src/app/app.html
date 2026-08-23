@@ -20,7 +20,7 @@
       } @else if (previewUrl(); as url) {
         <section class="crop-editor" aria-label="Crop editor">
           <div class="crop-canvas" [class.locked]="processing() || applyingCrop()" (pointerdown)="startCrop($event)" (pointermove)="updateCrop($event)" (pointerup)="finishCrop($event)" (pointercancel)="finishCrop($event)">
-            <img [src]="url" alt="Container image being cropped" draggable="false" (error)="retryPreview(url)" />
+            <img #previewImage [src]="url" alt="Container image being cropped" draggable="false" (load)="previewLoaded(url)" (error)="retryPreview(url)" />
             <div class="crop-selection" [style.left.%]="cropDraft().x * 100" [style.top.%]="cropDraft().y * 100" [style.width.%]="cropDraft().width * 100" [style.height.%]="cropDraft().height * 100">
               @for (handle of cropResizeHandles; track handle) {
                 <button class="crop-handle {{ handle }}" type="button" [disabled]="processing() || applyingCrop()" [attr.aria-label]="cropResizeHandleLabel(handle)" (pointerdown)="startCropResize($event, handle)"></button>

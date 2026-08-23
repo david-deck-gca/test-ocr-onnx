@@ -256,6 +256,79 @@ describe('App', () => {
     }
   });
 
+  it('should wait for the loaded preview before preparing an automatic crop', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      imageSelection: number;
+      waitForPreviewImage: ReturnType<typeof vi.fn>;
+      scanAutoCrop: ReturnType<typeof vi.fn>;
+      createSuggestedCrop: ReturnType<typeof vi.fn>;
+      prepareInitialCrop(image: Blob, selection: number): Promise<void>;
+    };
+    const preview = { naturalWidth: 1920, naturalHeight: 1080 } as HTMLImageElement;
+    let resolvePreview!: (image: HTMLImageElement) => void;
+    app.imageSelection = 1;
+    app.waitForPreviewImage = vi.fn().mockReturnValue(new Promise<HTMLImageElement>((resolve) => {
+      resolvePreview = resolve;
+    }));
+    app.scanAutoCrop = vi.fn().mockResolvedValue([]);
+    app.createSuggestedCrop = vi.fn().mockResolvedValue(null);
+
+    const preparation = app.prepareInitialCrop(new Blob(['image'], { type: 'image/jpeg' }), 1);
+    expect(app.scanAutoCrop).not.toHaveBeenCalled();
+
+    resolvePreview(preview);
+    await preparation;
+
+    expect(app.scanAutoCrop).toHaveBeenCalledWith(preview, 4_000_000);
+  });
+
+  it('should retry automatic OCR with a smaller image when the normal pass fails', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      imageSelection: number;
+      waitForPreviewImage: ReturnType<typeof vi.fn>;
+      scanAutoCrop: ReturnType<typeof vi.fn>;
+      createSuggestedCrop: ReturnType<typeof vi.fn>;
+      prepareInitialCrop(image: Blob, selection: number): Promise<void>;
+    };
+    const preview = { naturalWidth: 1920, naturalHeight: 1080 } as HTMLImageElement;
+    app.imageSelection = 1;
+    app.waitForPreviewImage = vi.fn().mockResolvedValue(preview);
+    app.scanAutoCrop = vi.fn()
+      .mockRejectedValueOnce(new Error('generated PNG could not be loaded'))
+      .mockResolvedValueOnce([]);
+    app.createSuggestedCrop = vi.fn().mockResolvedValue(null);
+
+    await app.prepareInitialCrop(new Blob(['image'], { type: 'image/jpeg' }), 1);
+
+    expect(app.scanAutoCrop).toHaveBeenNthCalledWith(1, preview, 4_000_000);
+    expect(app.scanAutoCrop).toHaveBeenNthCalledWith(2, preview, 1_000_000);
+  });
+
+  it('should create an automatic pass from the loaded preview instead of decoding the source blob', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      createCropPassFromSource: ReturnType<typeof vi.fn>;
+      detectWithTimeout: ReturnType<typeof vi.fn>;
+      scanAutoCrop(source: HTMLImageElement, maximumPixels: number): Promise<Array<{ text: string }>>;
+    };
+    const preview = { naturalWidth: 1920, naturalHeight: 1080 } as HTMLImageElement;
+    const revokeObjectUrl = vi.fn();
+    vi.stubGlobal('URL', { revokeObjectURL: revokeObjectUrl });
+    app.createCropPassFromSource = vi.fn().mockResolvedValue({ url: 'blob:auto-crop', offsetX: 0, offsetY: 0, scale: 0.5, revokeUrl: true });
+    app.detectWithTimeout = vi.fn().mockResolvedValue([{ text: 'HCSU 799790 9', mean: 0.99, box: [[10, 10]] }]);
+
+    try {
+      await app.scanAutoCrop(preview, 4_000_000);
+
+      expect(app.createCropPassFromSource).toHaveBeenCalledWith(preview, 1920, 1080, { x: 0, y: 0, width: 1, height: 1 }, 1, undefined, 4_000_000);
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:auto-crop');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('should retry a failed image preview with fresh object URLs', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -933,20 +1006,22 @@ describe('App', () => {
       imageSelection: number;
       cropDraft: () => { x: number; y: number; width: number; height: number };
       status: () => string;
-      detectWithRecovery: ReturnType<typeof vi.fn>;
-      createCropPass(): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }>;
-      createSuggestedCrop(lines: Array<{ text: string; mean: number; box: number[][] }>, containerId: string, image: Blob): Promise<{ x: number; y: number; width: number; height: number } | null>;
+      waitForPreviewImage: ReturnType<typeof vi.fn>;
+      scanAutoCrop: ReturnType<typeof vi.fn>;
+      createSuggestedCrop: ReturnType<typeof vi.fn>;
       prepareInitialCrop(image: Blob, selection: number): Promise<void>;
     };
     const focusedCrop = { x: 0.3, y: 0.2, width: 0.4, height: 0.35 };
+    const preview = { naturalWidth: 1920, naturalHeight: 1080 } as HTMLImageElement;
     app.imageSelection = 1;
-    app.detectWithRecovery = vi.fn().mockResolvedValue([{ text: 'HCSU 799790 9', mean: 0.95, box: [[300, 100], [500, 100], [500, 130], [300, 130]] }]);
-    app.createCropPass = async () => ({ url: 'blob:full-photo', offsetX: 0, offsetY: 0, scale: 1, revokeUrl: true });
-    app.createSuggestedCrop = async () => focusedCrop;
+    app.waitForPreviewImage = vi.fn().mockResolvedValue(preview);
+    app.scanAutoCrop = vi.fn().mockResolvedValue([{ text: 'HCSU 799790 9', mean: 0.95, box: [[300, 100], [500, 100], [500, 130], [300, 130]] }]);
+    app.createSuggestedCrop = vi.fn().mockResolvedValue(focusedCrop);
 
     await app.prepareInitialCrop(new Blob(), 1);
 
     expect(app.cropDraft()).toEqual(focusedCrop);
+    expect(app.createSuggestedCrop).toHaveBeenCalledWith(expect.any(Array), 'HCSU7997909', expect.any(Blob), { width: 1920, height: 1080 });
     expect(app.status()).toMatch(/markings below\. \(\d+ ms\)$/);
   });
 

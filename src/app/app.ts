@@ -14,6 +14,7 @@ type StoredRecord = { id: string; savedAt: string; payload: unknown; image?: Blo
 type SavedRecord = StoredRecord & { imageUrl: string | null };
 const DEFAULT_CROP: CropRect = { x: 0, y: 0, width: 1, height: 1 };
 const MAX_FULL_PHOTO_PIXELS = 4_000_000;
+const MAX_AUTO_CROP_FALLBACK_PIXELS = 1_000_000;
 const MAX_MANUAL_CROP_PIXELS = 4_000_000;
 const MAX_MANUAL_RETRY_CROP_PIXELS = 2_000_000;
 const MAX_PREVIEW_RETRIES = 2;
@@ -55,6 +56,7 @@ interface Diagnostic {
 })
 export class App {
   protected readonly fileInput = viewChild<ElementRef<HTMLInputElement>>('fileInput');
+  protected readonly previewImage = viewChild<ElementRef<HTMLImageElement>>('previewImage');
   protected readonly videoPreview = viewChild<ElementRef<HTMLVideoElement>>('videoPreview');
   protected readonly sourceName = signal('');
   protected readonly previewUrl = signal<string | null>(null);
@@ -114,6 +116,7 @@ export class App {
   private cropResize: { handle: CropResizeHandle; crop: CropRect } | null = null;
   private imageSelection = 0;
   private previewRetries = 0;
+  private previewLoad: { selection: number; resolve: (image: HTMLImageElement) => void; reject: (reason: Error) => void } | null = null;
 
   protected openFilePicker(): void {
     this.clearFields();
@@ -269,7 +272,18 @@ export class App {
 
     this.previewUrl.set(null);
     URL.revokeObjectURL(failedUrl);
+    this.cancelPreviewLoad(new Error('The selected image preview could not be loaded.'));
     this.addDiagnostic('Image preview', 'The selected image could not be displayed. Choose the image again.');
+  }
+
+  protected previewLoaded(url: string): void {
+    const pending = this.previewLoad;
+    const image = this.previewImage()?.nativeElement;
+    if (!pending || pending.selection !== this.imageSelection || this.previewUrl() !== url || !image?.naturalWidth || !image.naturalHeight) {
+      return;
+    }
+    this.previewLoad = null;
+    pending.resolve(image);
   }
 
   protected updateField(key: FieldKey, value: string): void {
@@ -446,6 +460,7 @@ export class App {
 
   protected ngOnDestroy(): void {
     this.closeCamera();
+    this.cancelPreviewLoad(new Error('The component was destroyed.'));
     const current = this.previewUrl();
     if (current) {
       URL.revokeObjectURL(current);
@@ -464,6 +479,7 @@ export class App {
   }
 
   private useImage(image: Blob, name: string): void {
+    this.cancelPreviewLoad(new Error('A different image was selected.'));
     const current = this.previewUrl();
     if (current) {
       URL.revokeObjectURL(current);
@@ -539,18 +555,25 @@ export class App {
     this.processing.set(true);
     this.status.set('Locating the container ID and markings in the full photo...');
     try {
-      const pass = await this.createCropPass(image, DEFAULT_CROP, 1, undefined, MAX_FULL_PHOTO_PIXELS);
+      const preview = await this.waitForPreviewImage(selection);
+      if (selection !== this.imageSelection) return;
+
       let lines: OcrLine[];
       try {
-        lines = this.deduplicateLines((await this.detectWithRecovery(pass.url, { retried: false })).map((line) => ({
-          ...line,
-          box: line.box?.map(([x, y]) => [x / pass.scale, y / pass.scale]),
-        })));
-      } finally {
-        URL.revokeObjectURL(pass.url);
+        lines = await this.scanAutoCrop(preview, MAX_FULL_PHOTO_PIXELS);
+      } catch (error: unknown) {
+        this.status.set('Full-photo OCR could not use its normal size. Retrying with a reduced image...');
+        try {
+          lines = await this.scanAutoCrop(preview, MAX_AUTO_CROP_FALLBACK_PIXELS);
+        } catch (fallbackError: unknown) {
+          throw new Error(`Normal-size auto crop failed: ${this.errorMessage(error)}. Reduced auto crop failed: ${this.errorMessage(fallbackError)}`);
+        }
       }
       const containerId = this.extractFields(lines).containerId.value;
-      const suggestedCrop = await this.createSuggestedCrop(lines, containerId, image);
+      const suggestedCrop = await this.createSuggestedCrop(lines, containerId, image, {
+        width: preview.naturalWidth,
+        height: preview.naturalHeight,
+      });
       if (selection !== this.imageSelection || this.cropRect()) return;
       const duration = ` (${Math.round(performance.now() - startedAt)} ms)`;
       if (suggestedCrop) {
@@ -567,6 +590,34 @@ export class App {
       if (selection === this.imageSelection) {
         this.processing.set(false);
       }
+    }
+  }
+
+  private waitForPreviewImage(selection: number): Promise<HTMLImageElement> {
+    const image = this.previewImage()?.nativeElement;
+    if (selection === this.imageSelection && image?.src === this.previewUrl() && image.complete && image.naturalWidth && image.naturalHeight) {
+      return Promise.resolve(image);
+    }
+    return new Promise<HTMLImageElement>((resolve, reject) => {
+      this.previewLoad = { selection, resolve, reject };
+    });
+  }
+
+  private cancelPreviewLoad(reason: Error): void {
+    const pending = this.previewLoad;
+    this.previewLoad = null;
+    pending?.reject(reason);
+  }
+
+  private async scanAutoCrop(source: HTMLImageElement, maximumPixels: number): Promise<OcrLine[]> {
+    const pass = await this.createCropPassFromSource(source, source.naturalWidth, source.naturalHeight, DEFAULT_CROP, 1, undefined, maximumPixels);
+    try {
+      return this.deduplicateLines((await this.detectWithTimeout(pass.url)).map((line) => ({
+        ...line,
+        box: line.box?.map(([x, y]) => [x / pass.scale, y / pass.scale]),
+      })));
+    } finally {
+      URL.revokeObjectURL(pass.url);
     }
   }
 
@@ -663,25 +714,27 @@ export class App {
     return `Resize crop from ${handle.replace('-', ' ')}`;
   }
 
-  private async createSuggestedCrop(lines: OcrLine[], containerId: string, image: Blob): Promise<CropRect | null> {
+  private async createSuggestedCrop(lines: OcrLine[], containerId: string, image: Blob, sourceSize?: { width: number; height: number }): Promise<CropRect | null> {
     const markingsBounds = this.suggestedMarkingBounds(lines, containerId);
     if (!markingsBounds) return null;
 
-    const decodedImage = await this.decodeImage(image);
+    const decodedImage = sourceSize ? null : await this.decodeImage(image);
+    const width = sourceSize?.width ?? decodedImage!.width;
+    const height = sourceSize?.height ?? decodedImage!.height;
     try {
       const padding = Math.max(24, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.08);
       const left = Math.max(0, markingsBounds.left - padding);
       const top = Math.max(0, markingsBounds.top - padding);
-      const right = Math.min(decodedImage.width, markingsBounds.right + padding);
-      const bottom = Math.min(decodedImage.height, markingsBounds.bottom + padding);
+      const right = Math.min(width, markingsBounds.right + padding);
+      const bottom = Math.min(height, markingsBounds.bottom + padding);
       return {
-        x: left / decodedImage.width,
-        y: top / decodedImage.height,
-        width: (right - left) / decodedImage.width,
-        height: (bottom - top) / decodedImage.height,
+        x: left / width,
+        y: top / height,
+        width: (right - left) / width,
+        height: (bottom - top) / height,
       };
     } finally {
-      decodedImage.release();
+      decodedImage?.release();
     }
   }
 
@@ -769,24 +822,34 @@ export class App {
   private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }> {
     const decodedImage = await this.decodeImage(image);
     try {
-      const sourceX = Math.round(crop.x * decodedImage.width);
-      const sourceY = Math.round(crop.y * decodedImage.height);
-      const sourceWidth = Math.max(1, Math.round(crop.width * decodedImage.width));
-      const sourceHeight = Math.max(1, Math.round(crop.height * decodedImage.height));
-      const outputScale = this.cropOutputScale(sourceWidth, sourceHeight, scale, maximumWidth, this.runtimeCropPixelBudget(maximumPixels));
-      const canvas = document.createElement('canvas');
+      return await this.createCropPassFromSource(decodedImage.source, decodedImage.width, decodedImage.height, crop, scale, maximumWidth, maximumPixels);
+    } finally {
+      decodedImage.release();
+    }
+  }
+
+  private async createCropPassFromSource(source: CanvasImageSource, imageWidth: number, imageHeight: number, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }> {
+    const sourceX = Math.round(crop.x * imageWidth);
+    const sourceY = Math.round(crop.y * imageHeight);
+    const sourceWidth = Math.max(1, Math.round(crop.width * imageWidth));
+    const sourceHeight = Math.max(1, Math.round(crop.height * imageHeight));
+    const outputScale = this.cropOutputScale(sourceWidth, sourceHeight, scale, maximumWidth, this.runtimeCropPixelBudget(maximumPixels));
+    const canvas = document.createElement('canvas');
+    try {
       canvas.width = Math.max(1, Math.round(sourceWidth * outputScale));
       canvas.height = Math.max(1, Math.round(sourceHeight * outputScale));
       const context = canvas.getContext('2d');
       if (!context) throw new Error('Canvas 2D context is unavailable.');
-      context.drawImage(decodedImage.source, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+      context.drawImage(source, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
       const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((result) => {
         if (result) resolve(result);
         else reject(new Error('Manual crop could not be created.'));
       }, 'image/png'));
       return { url: URL.createObjectURL(blob), offsetX: sourceX, offsetY: sourceY, scale: outputScale, revokeUrl: true };
     } finally {
-      decodedImage.release();
+      // Reset dimensions to release this large backing store before the next image pass.
+      canvas.width = 0;
+      canvas.height = 0;
     }
   }
 
