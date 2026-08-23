@@ -1,13 +1,13 @@
 # Utilisation
 - Ouvrir l’[URL de l'application](https://gcatrans.github.io/test-ocr-onnx-develop/).
-- Sélectionner « Manual crop » (rognage manuel, recommandé pour Android) ou « Auto crop » (rognage automatique).
-- Cliquer sur « Choose image » ou « Choose another image » selon l’écran, pour sélectionner une photo.
+- Sélectionner « Manual » (rognage manuel, recommandé pour Android) ou « Auto » (rognage automatique).
+- Cliquer sur « New » pour prendre une photo ou « Existing » pour sélectionner une photo existante.
 - Rognage
-  - Manual crop : Tracer un rectangle autour de la zone de marquages sans couper les caractères.
-  - Auto crop :
+  - Manual : Tracer un rectangle autour de la zone de marquages sans couper les caractères.
+  - Auto :
     - Attendre que le statut indique « Container ID located… ».
     - Vérifier que l'application a bien entouré la zone de marquages et la redimensionner manuellement si elle inclut des caractères qui ne sont pas des marquages.
-- Cliquer sur « Use selected region ».
+- Cliquer sur « Scan selected crop region ».
 - Attendre l'affichage des résultats.
 - /!\ En cas d’erreur, relancer l’application et recommencer la procédure.
 

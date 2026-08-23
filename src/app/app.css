@@ -191,19 +191,6 @@ video {
   border: 1px solid #57715c;
   padding: 14px;
 }
-.crop-editor h3 {
-  color: #eaf0eb;
-  font:
-    700 1.1rem Arial,
-    sans-serif;
-  margin: 0;
-}
-.crop-editor p {
-  color: #aab9ae;
-  font-size: 0.8rem;
-  line-height: 1.4;
-  margin: 7px 0 13px;
-}
 .crop-canvas {
   cursor: crosshair;
   line-height: 0;
@@ -260,10 +247,6 @@ video {
   bottom: -10px;
   cursor: nesw-resize;
   right: -10px;
-}
-.crop-actions .run-button {
-  font-size: 0.8rem;
-  padding: 8px 10px;
 }
 .capture-mode {
   align-items: center;

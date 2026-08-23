@@ -7,8 +7,6 @@
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
-    "models:download": "node scripts/download-models.mjs",
-    "models:convert": "node scripts/convert-models.mjs",
     "prepare:opencv": "node scripts/prepare-opencv.mjs",
     "postinstall": "npm run prepare:opencv"
   },
@@ -18,9 +16,7 @@
     "@angular/common": "^22.0.0",
     "@angular/compiler": "^22.0.0",
     "@angular/core": "^22.0.0",
-    "@angular/forms": "^22.0.0",
     "@angular/platform-browser": "^22.0.0",
-    "@angular/router": "^22.0.0",
     "@angular/service-worker": "^22.0.8",
     "@gutenye/ocr-browser": "^1.4.8",
     "onnxruntime-web": "^1.27.0",
@@ -32,7 +28,6 @@
     "@angular/cli": "^22.0.5",
     "@angular/compiler-cli": "^22.0.0",
     "jsdom": "^28.0.0",
-    "prettier": "^3.8.1",
     "typescript": "~6.0.2",
     "vitest": "^4.0.8"
   }

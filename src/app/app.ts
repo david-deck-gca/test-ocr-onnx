@@ -1,6 +1,5 @@
 import { Component, ElementRef, Injector, afterNextRender, computed, inject, signal, viewChild } from '@angular/core';
-import Ocr from '@gutenye/ocr-browser';
-import * as ort from 'onnxruntime-web';
+import { OcrService } from './ocr.service';
 
 type CaptureMode = 'auto-crop' | 'manual-crop';
 type FieldKey = 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters' | 'capacityCubicMeters' | 'capacityCubicFeet';
@@ -60,11 +59,9 @@ export class App {
   protected readonly sourceName = signal('');
   protected readonly previewUrl = signal<string | null>(null);
   protected readonly imageBlob = signal<Blob | null>(null);
-  protected readonly cropEditorOpen = signal(false);
   protected readonly cropRect = signal<CropRect | null>(null);
   protected readonly cropDraft = signal<CropRect>(DEFAULT_CROP);
   protected readonly applyingCrop = signal(false);
-  protected readonly automaticCropSuggested = signal(false);
   protected readonly cropResizeHandles: CropResizeHandle[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
   protected readonly captureMode = signal<CaptureMode>(defaultCaptureMode());
   protected readonly cameraOpen = signal(false);
@@ -112,7 +109,7 @@ export class App {
 
   private stream: MediaStream | null = null;
   private readonly injector = inject(Injector);
-  private ocr: Awaited<ReturnType<typeof Ocr.create>> | null = null;
+  private readonly ocrService = inject(OcrService);
   private cropStart: { x: number; y: number } | null = null;
   private cropResize: { handle: CropResizeHandle; crop: CropRect } | null = null;
   private imageSelection = 0;
@@ -136,18 +133,6 @@ export class App {
     }
     this.useImage(file, file.name);
     input.value = '';
-  }
-
-  protected openCropEditor(): void {
-    this.cropDraft.set(this.cropRect() ?? DEFAULT_CROP);
-    this.automaticCropSuggested.set(false);
-    this.cropEditorOpen.set(true);
-  }
-
-  protected closeCropEditor(): void {
-    this.cropStart = null;
-    this.cropResize = null;
-    this.cropEditorOpen.set(false);
   }
 
   protected startCrop(event: PointerEvent): void {
@@ -208,7 +193,6 @@ export class App {
     this.applyingCrop.set(true);
     try {
       this.cropRect.set(crop);
-      this.automaticCropSuggested.set(false);
       await this.processImage();
     } finally {
       this.applyingCrop.set(false);
@@ -308,7 +292,6 @@ export class App {
     this.analysisSuccessful.set(false);
     this.processing.set(true);
     this.diagnostics.set([]);
-    this.automaticCropSuggested.set(false);
     this.status.set('Preparing local OCR models...');
     const imageUrl = this.previewUrl();
     if (!imageUrl) {
@@ -364,8 +347,6 @@ export class App {
       }
       if (suggestedCrop) {
         this.cropDraft.set(suggestedCrop);
-        this.automaticCropSuggested.set(true);
-        this.cropEditorOpen.set(true);
         this.status.set('OCR complete. Review the suggested region around the container ID and markings beneath it.');
       } else {
         this.status.set(`OCR complete. Found ${lines.length} text region${lines.length === 1 ? '' : 's'}. Review the fields before saving.`);
@@ -476,6 +457,10 @@ export class App {
 
   protected ngOnInit(): void {
     void this.loadSavedRecords();
+    const initializationError = this.ocrService.initializationError();
+    if (initializationError) {
+      this.addDiagnostic('OCR initialization', 'Local OCR could not be initialized. Refresh the app and try again.', initializationError);
+    }
   }
 
   private useImage(image: Blob, name: string): void {
@@ -488,8 +473,6 @@ export class App {
     this.previewRetries = 0;
     this.sourceName.set(name);
     this.applyingCrop.set(false);
-    this.automaticCropSuggested.set(false);
-    this.cropEditorOpen.set(true);
     this.cropRect.set(null);
     this.cropDraft.set(DEFAULT_CROP);
     this.rawText.set([]);
@@ -572,7 +555,6 @@ export class App {
       const duration = ` (${Math.round(performance.now() - startedAt)} ms)`;
       if (suggestedCrop) {
         this.cropDraft.set(suggestedCrop);
-        this.automaticCropSuggested.set(true);
         this.status.set(`Container ID located. Review the suggested crop around it and the markings below.${duration}`);
       } else {
         this.status.set(`Container ID was not located. Draw a crop around the ID and markings you want to scan.${duration}`);
@@ -588,43 +570,22 @@ export class App {
     }
   }
 
-  private async getOcr(): Promise<Awaited<ReturnType<typeof Ocr.create>>> {
-    if (this.ocr) {
-      return this.ocr;
-    }
-    ort.env.wasm.wasmPaths = new URL('ort/', document.baseURI).toString();
-    // One worker avoids allocating multiple large WASM heaps on memory-constrained mobile devices.
-    ort.env.wasm.numThreads = 1;
-    this.ocr = await Ocr.create({
-      models: {
-        detectionPath: new URL('models/ch_PP-OCRv4_det_infer.onnx', document.baseURI).toString(),
-        recognitionPath: new URL('models/ch_PP-OCRv4_rec_infer.onnx', document.baseURI).toString(),
-        dictionaryPath: new URL('models/ppocr_keys_v1.txt', document.baseURI).toString(),
-      },
-    });
-    return this.ocr;
-  }
-
   private async detectWithRecovery(url: string, recovery: { retried: boolean }) {
     try {
       return await this.detectWithTimeout(url);
     } catch (error: unknown) {
       if (recovery.retried) throw error;
       recovery.retried = true;
-      // The OCR package does not expose session disposal, but recreating its instance
-      // gives subsequent inference a fresh set of ONNX sessions.
-      this.ocr = null;
-      this.status.set('Local OCR stalled. Restarting local models and retrying once...');
+      this.status.set('Local OCR stalled. Retrying local OCR once...');
       return this.detectWithTimeout(url);
     }
   }
 
   private async detectWithTimeout(url: string) {
-    const ocr = await this.getOcr();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
-        ocr.detect(url),
+        this.ocrService.detect(url),
         new Promise<never>((_, reject) => {
           timeout = setTimeout(() => reject(new Error(`OCR did not finish within ${OCR_PASS_TIMEOUT_MS / 1000} seconds.`)), OCR_PASS_TIMEOUT_MS);
         }),

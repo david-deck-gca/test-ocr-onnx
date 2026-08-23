@@ -393,25 +393,22 @@ describe('App', () => {
     expect(panel.textContent).not.toContain('(98%)');
   });
 
-  it('should retain the crop editor and replace the previous crop before processing', async () => {
+  it('should replace the previous crop before processing', async () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       cropDraft: { set(value: { x: number; y: number; width: number; height: number }): void };
       cropRect: { set(value: { x: number; y: number; width: number; height: number } | null): void; (): { x: number; y: number; width: number; height: number } | null };
-      cropEditorOpen: { set(value: boolean): void; (): boolean };
       processImage: ReturnType<typeof vi.fn>;
       applyCropAndProcess(): Promise<void>;
     };
     const crop = { x: 0.2, y: 0.3, width: 0.4, height: 0.2 };
     app.cropDraft.set(crop);
     app.cropRect.set({ x: 0, y: 0, width: 1, height: 1 });
-    app.cropEditorOpen.set(true);
     app.processImage = vi.fn().mockResolvedValue(undefined);
 
     await app.applyCropAndProcess();
 
     expect(app.cropRect()).toEqual(crop);
-    expect(app.cropEditorOpen()).toBe(true);
     expect(app.processImage).toHaveBeenCalled();
   });
 
@@ -438,13 +435,11 @@ describe('App', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       previewUrl: { set(value: string | null): void };
-      cropEditorOpen: { set(value: boolean): void };
       cropDraft: { set(value: { x: number; y: number; width: number; height: number }): void };
       processing: { set(value: boolean): void };
       applyingCrop: { set(value: boolean): void };
     };
     app.previewUrl.set('blob:container-image');
-    app.cropEditorOpen.set(true);
     app.cropDraft.set({ x: 0.2, y: 0.3, width: 0.4, height: 0.2 });
     app.processing.set(true);
     fixture.detectChanges();
@@ -522,21 +517,18 @@ describe('App', () => {
     expect(app.createJsonPayload().source.manualCrop).toEqual(crop);
   });
 
-  it('should recreate local OCR once after a failed detection', async () => {
+  it('should retry local OCR once after a failed detection without recreating it', async () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
-      getOcr: ReturnType<typeof vi.fn>;
+      detectWithTimeout: ReturnType<typeof vi.fn>;
       detectWithRecovery(url: string, recovery: { retried: boolean }): Promise<string[]>;
     };
-    const firstOcr = { detect: vi.fn().mockRejectedValue(new Error('stalled worker')) };
-    const replacementOcr = { detect: vi.fn().mockResolvedValue(['container text']) };
-    app.getOcr = vi.fn().mockResolvedValueOnce(firstOcr).mockResolvedValueOnce(replacementOcr);
+    app.detectWithTimeout = vi.fn().mockRejectedValueOnce(new Error('stalled worker')).mockResolvedValueOnce(['container text']);
 
     await expect(app.detectWithRecovery('blob:crop', { retried: false })).resolves.toEqual(['container text']);
 
-    expect(firstOcr.detect).toHaveBeenCalledWith('blob:crop');
-    expect(replacementOcr.detect).toHaveBeenCalledWith('blob:crop');
-    expect(app.getOcr).toHaveBeenCalledTimes(2);
+    expect(app.detectWithTimeout).toHaveBeenCalledWith('blob:crop');
+    expect(app.detectWithTimeout).toHaveBeenCalledTimes(2);
   });
 
   it('should use a loaded image element when bitmap and image decode fail', async () => {
@@ -940,25 +932,21 @@ describe('App', () => {
     const app = fixture.componentInstance as unknown as {
       imageSelection: number;
       cropDraft: () => { x: number; y: number; width: number; height: number };
-      automaticCropSuggested: () => boolean;
       status: () => string;
-      getOcr(): Promise<{ detect(url: string): Promise<Array<{ text: string; mean: number; box: number[][] }>> }>;
+      detectWithRecovery: ReturnType<typeof vi.fn>;
       createCropPass(): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }>;
       createSuggestedCrop(lines: Array<{ text: string; mean: number; box: number[][] }>, containerId: string, image: Blob): Promise<{ x: number; y: number; width: number; height: number } | null>;
       prepareInitialCrop(image: Blob, selection: number): Promise<void>;
     };
     const focusedCrop = { x: 0.3, y: 0.2, width: 0.4, height: 0.35 };
     app.imageSelection = 1;
-    app.getOcr = async () => ({
-      detect: async () => [{ text: 'HCSU 799790 9', mean: 0.95, box: [[300, 100], [500, 100], [500, 130], [300, 130]] }],
-    });
+    app.detectWithRecovery = vi.fn().mockResolvedValue([{ text: 'HCSU 799790 9', mean: 0.95, box: [[300, 100], [500, 100], [500, 130], [300, 130]] }]);
     app.createCropPass = async () => ({ url: 'blob:full-photo', offsetX: 0, offsetY: 0, scale: 1, revokeUrl: true });
     app.createSuggestedCrop = async () => focusedCrop;
 
     await app.prepareInitialCrop(new Blob(), 1);
 
     expect(app.cropDraft()).toEqual(focusedCrop);
-    expect(app.automaticCropSuggested()).toBe(true);
     expect(app.status()).toMatch(/markings below\. \(\d+ ms\)$/);
   });
 

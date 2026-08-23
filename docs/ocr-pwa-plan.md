@@ -4,16 +4,11 @@
 
 The Angular 22 PWA shell is implemented. It supports camera capture, device image selection, manual rectangle crops with previews and saved normalized coordinates, editable structured fields, ISO 6346 check-digit validation, local saved records, and accessible technical diagnostics. OCR normally scans the full photo unless a manual crop is selected. The user interface does not upload images.
 
-`npm run build` and `npm test -- --watch=false` passed on 2026-08-15.
+`npm run build` and `npm test -- --watch=false` passed on 2026-08-23.
 
-Browser OCR is provided by `@gutenye/ocr-browser`, an MIT-licensed browser implementation built on PaddleOCR and ONNX Runtime. It performs detector preprocessing, text-region extraction, recognition preprocessing, and CTC decoding on-device. OpenCV.js is shipped as a local static asset but is not yet used by the crop workflow. The UI reports initialization and inference failures with the original technical details.
+Browser OCR is provided by `@gutenye/ocr-browser`, an MIT-licensed browser implementation built on PaddleOCR and ONNX Runtime. The detector and recognizer sessions initialize during Angular application bootstrap. The package performs detector preprocessing, text-region extraction, recognition preprocessing, and CTC decoding on-device. OpenCV.js is shipped as a local static asset but is not yet used by the crop workflow. The UI reports initialization and inference failures with the original technical details.
 
 ## Model preparation
-
-`npm run models:download` can download the official PaddleOCR source inference archives for provenance:
-
-- PP-OCRv5 mobile text detector
-- English PP-OCRv5 mobile recognizer
 
 The active browser model bundle comes from the `@gutenye/ocr-models` npm package and is copied into the Angular build at:
 
@@ -21,7 +16,7 @@ The active browser model bundle comes from the `@gutenye/ocr-models` npm package
 - `/models/ch_PP-OCRv4_rec_infer.onnx`
 - `/models/ppocr_keys_v1.txt`
 
-The package implements the matching image normalization, detector box decoding, crop rectification, CTC decoding, and character dictionary mapping. Any PP-OCRv5 source archives downloaded for provenance are not included in the deployed model bundle because their current Paddle 3 export format could not be converted with the available Windows Paddle2ONNX binary.
+The package implements the matching image normalization, detector box decoding, crop rectification, CTC decoding, and character dictionary mapping.
 
 ## JSON contract
 
@@ -31,7 +26,7 @@ One input image produces one JSON record. It includes source metadata, manual cr
 
 Saving a result writes both the JSON payload and the selected image `Blob` to the browser's IndexedDB `container-mark-reader` database. Saved records are loaded when the app opens and shown with a small local photo preview, JSON viewer, and delete action. Records saved before image persistence remain readable and are shown without a photo.
 
-The selected-image and selected-crop previews each retry failed Blob URL loads twice. OCR detection has a 45-second watchdog; after a failure or timeout, the app recreates the local OCR instance and retries the detection once before showing a diagnostic.
+The selected-image and selected-crop previews each retry failed Blob URL loads twice. OCR detection has a 45-second watchdog; after a failure or timeout, the app retries detection once using the already initialized OCR sessions before showing a diagnostic.
 
 ## Offline deployment
 
