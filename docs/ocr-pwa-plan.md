@@ -24,7 +24,7 @@ One input image produces one JSON record. It includes source metadata, manual cr
 
 ## Local records and recovery
 
-Saving a result writes both the JSON payload and the selected image `Blob` to the browser's IndexedDB `container-mark-reader` database. Saved records are loaded when the app opens and shown with a small local photo preview, JSON viewer, and delete action. Records saved before image persistence remain readable and are shown without a photo.
+Saving a result writes the JSON payload, a 160px JPEG thumbnail, and the selected image `Blob` to the browser's IndexedDB `container-mark-reader` database. The saved-result list loads only record metadata and thumbnails; the full photo is loaded from a separate IndexedDB store only after the user selects `View photo`. Existing saved photos are migrated to that store, and records without a thumbnail remain readable with a placeholder.
 
 The selected-image and selected-crop previews each retry failed Blob URL loads twice. OCR detection has a 45-second watchdog; after a failure or timeout, the app retries detection once using the already initialized OCR sessions before showing a diagnostic.
 
@@ -44,4 +44,3 @@ The image picker accepts `image/*`, so it supports formats the user's browser ca
 4. Add curved-text unwarping after measuring failure cases on representative container photos.
 5. Add a sample-image evaluation set and field-level accuracy benchmark.
 6. Add model-version switching and offline cache status management.
-7. Store small image thumbnails for saved-record list entries and load full saved photos only on demand.

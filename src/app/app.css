@@ -32,7 +32,7 @@
   border: 1px solid #32443a;
   display: grid;
   gap: 8px;
-  grid-template-columns: 44px 1fr auto auto;
+  grid-template-columns: 44px 1fr auto auto auto;
   padding: 6px;
 }
 .saved-record-list img,
@@ -61,6 +61,26 @@
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+.saved-photo {
+  border-top: 1px solid #32443a;
+  margin-top: 12px;
+  padding-top: 12px;
+}
+.saved-photo > div {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+.saved-photo h3 {
+  margin: 0 0 8px;
+}
+.saved-photo img {
+  display: block;
+  height: auto;
+  max-height: 70dvh;
+  object-fit: contain;
+  width: 100%;
 }
 :host {
   color: #eaf0eb;

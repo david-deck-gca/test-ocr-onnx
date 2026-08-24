@@ -400,18 +400,18 @@ describe('App', () => {
     }
   });
 
-  it('should create a display URL for a saved photo', () => {
+  it('should create a display URL for a saved thumbnail', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
-      hydrateSavedRecord(record: { id: string; savedAt: string; payload: unknown; image: Blob }): { imageUrl: string | null };
+      hydrateSavedRecord(record: { id: string; savedAt: string; payload: unknown; thumbnail: Blob }): { thumbnailUrl: string | null };
     };
-    const createObjectUrl = vi.fn().mockReturnValue('blob:saved-photo');
+    const createObjectUrl = vi.fn().mockReturnValue('blob:saved-thumbnail');
     vi.stubGlobal('URL', { createObjectURL: createObjectUrl });
 
     try {
-      const record = app.hydrateSavedRecord({ id: 'record-1', savedAt: '2026-08-15T08:00:00.000Z', payload: {}, image: new Blob(['image'], { type: 'image/jpeg' }) });
+      const record = app.hydrateSavedRecord({ id: 'record-1', savedAt: '2026-08-15T08:00:00.000Z', payload: {}, thumbnail: new Blob(['image'], { type: 'image/jpeg' }) });
 
-      expect(record.imageUrl).toBe('blob:saved-photo');
+      expect(record.thumbnailUrl).toBe('blob:saved-thumbnail');
       expect(createObjectUrl).toHaveBeenCalledTimes(1);
     } finally {
       vi.unstubAllGlobals();
@@ -421,16 +421,49 @@ describe('App', () => {
   it('should render saved records with JSON and delete controls', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
-      savedRecords: { set(records: Array<{ id: string; savedAt: string; payload: unknown; imageUrl: string | null }>): void };
+      savedRecords: { set(records: Array<{ id: string; savedAt: string; payload: unknown; thumbnailUrl: string | null; hasImage: boolean }>): void };
     };
-    app.savedRecords.set([{ id: 'record-1', savedAt: '2026-08-15T08:00:00.000Z', payload: { source: { fileName: 'container.jpg' } }, imageUrl: 'blob:saved-photo' }]);
+    app.savedRecords.set([{ id: 'record-1', savedAt: '2026-08-15T08:00:00.000Z', payload: { source: { fileName: 'container.jpg' } }, thumbnailUrl: 'blob:saved-thumbnail', hasImage: true }]);
     fixture.detectChanges();
 
     const savedResults = (fixture.nativeElement as HTMLElement).querySelector('.saved-results')!;
     expect(savedResults.textContent).toContain('container.jpg');
+    expect(savedResults.textContent).toContain('View photo');
     expect(savedResults.textContent).toContain('View JSON');
     expect(savedResults.textContent).toContain('Delete');
     expect(savedResults.querySelector<HTMLButtonElement>('.delete-all-button')?.disabled).toBe(false);
+    expect(savedResults.querySelector<HTMLButtonElement>('.saved-record-list button')?.disabled).toBe(false);
+  });
+
+  it('should disable viewing a photo when only saved metadata is available', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      savedRecords: { set(records: Array<{ id: string; savedAt: string; payload: unknown; thumbnailUrl: string | null; hasImage: boolean }>): void };
+    };
+    app.savedRecords.set([{ id: 'record-1', savedAt: '2026-08-15T08:00:00.000Z', payload: {}, thumbnailUrl: null, hasImage: false }]);
+    fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.saved-record-list button')?.disabled).toBe(true);
+  });
+
+  it('should revoke the displayed full-photo URL when closing it', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      savedPhoto: { set(value: { id: string; name: string; url: string } | null): void; (): { id: string; name: string; url: string } | null };
+      closeSavedPhoto(): void;
+    };
+    const revokeObjectUrl = vi.fn();
+    vi.stubGlobal('URL', { revokeObjectURL: revokeObjectUrl });
+
+    try {
+      app.savedPhoto.set({ id: 'record-1', name: 'container.jpg', url: 'blob:full-photo' });
+      app.closeSavedPhoto();
+
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:full-photo');
+      expect(app.savedPhoto()).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('should disable deleting all saved results when none exist', () => {

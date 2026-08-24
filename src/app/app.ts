@@ -10,8 +10,9 @@ type CropResizeHandle = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right
 type DecodedImage = { source: CanvasImageSource; width: number; height: number; release: () => void };
 type OcrPass = { label: string; url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean };
 type RawScan = { label: string; lines: Array<{ text: string; confidence: number }>; durationMs: number };
-type StoredRecord = { id: string; savedAt: string; payload: unknown; image?: Blob };
-type SavedRecord = StoredRecord & { imageUrl: string | null };
+type StoredRecord = { id: string; savedAt: string; payload: unknown; thumbnail?: Blob; hasImage?: boolean; image?: Blob };
+type StoredImage = { id: string; image: Blob };
+type SavedRecord = StoredRecord & { thumbnailUrl: string | null };
 const DEFAULT_CROP: CropRect = { x: 0, y: 0, width: 1, height: 1 };
 const MAX_FULL_PHOTO_PIXELS = 4_000_000;
 const MAX_AUTO_CROP_FALLBACK_PIXELS = 1_000_000;
@@ -21,6 +22,8 @@ const MAX_PREVIEW_RETRIES = 2;
 const OCR_PASS_TIMEOUT_MS = 45_000;
 const CROP_MEMORY_HEADROOM = 0.25;
 const CROP_BYTES_PER_PIXEL = 16;
+const THUMBNAIL_MAX_DIMENSION = 160;
+const THUMBNAIL_JPEG_QUALITY = 0.8;
 
 function defaultCaptureMode(): CaptureMode {
   if (typeof navigator === 'undefined') {
@@ -75,6 +78,7 @@ export class App {
   protected readonly rawScans = signal<RawScan[]>([]);
   protected readonly savedRecords = signal<SavedRecord[]>([]);
   protected readonly savedJson = signal<string | null>(null);
+  protected readonly savedPhoto = signal<{ id: string; name: string; url: string } | null>(null);
   protected readonly fields = signal<Record<FieldKey, ContainerField>>({
     containerId: { value: '' },
     isoCode: { value: '' },
@@ -381,12 +385,14 @@ export class App {
       return;
     }
     try {
+      const thumbnail = await this.createThumbnail(image);
       const database = await this.openSavedRecordsDatabase();
       const payload = this.createJsonPayload();
       const id = crypto.randomUUID();
       await new Promise<void>((resolve, reject) => {
-        const transaction = database.transaction('records', 'readwrite');
-        transaction.objectStore('records').add({ id, savedAt: new Date().toISOString(), payload, image });
+        const transaction = database.transaction(['records', 'images'], 'readwrite');
+        transaction.objectStore('records').add({ id, savedAt: new Date().toISOString(), payload, thumbnail, hasImage: true });
+        transaction.objectStore('images').add({ id, image });
         transaction.oncomplete = () => resolve();
         transaction.onerror = () => reject(transaction.error);
         transaction.onabort = () => reject(transaction.error);
@@ -407,12 +413,41 @@ export class App {
     this.savedJson.set(null);
   }
 
+  protected async viewSavedPhoto(record: SavedRecord): Promise<void> {
+    if (!record.hasImage) return;
+    try {
+      const database = await this.openSavedRecordsDatabase();
+      const storedImage = await new Promise<StoredImage | undefined>((resolve, reject) => {
+        const transaction = database.transaction('images', 'readonly');
+        const request = transaction.objectStore('images').get(record.id);
+        request.onsuccess = () => resolve(request.result as StoredImage | undefined);
+        request.onerror = () => reject(request.error);
+      });
+      database.close();
+      if (!storedImage?.image) {
+        this.addDiagnostic('IndexedDB', 'The saved photo is no longer available.');
+        return;
+      }
+      this.closeSavedPhoto();
+      this.savedPhoto.set({ id: record.id, name: this.savedRecordName(record), url: URL.createObjectURL(storedImage.image) });
+    } catch (error: unknown) {
+      this.addDiagnostic('IndexedDB', 'The saved photo could not be loaded.', this.errorMessage(error));
+    }
+  }
+
+  protected closeSavedPhoto(): void {
+    const photo = this.savedPhoto();
+    if (photo) URL.revokeObjectURL(photo.url);
+    this.savedPhoto.set(null);
+  }
+
   protected async deleteSavedRecord(id: string): Promise<void> {
     try {
       const database = await this.openSavedRecordsDatabase();
       await new Promise<void>((resolve, reject) => {
-        const transaction = database.transaction('records', 'readwrite');
+        const transaction = database.transaction(['records', 'images'], 'readwrite');
         transaction.objectStore('records').delete(id);
+        transaction.objectStore('images').delete(id);
         transaction.oncomplete = () => resolve();
         transaction.onerror = () => reject(transaction.error);
         transaction.onabort = () => reject(transaction.error);
@@ -420,9 +455,10 @@ export class App {
       database.close();
       this.savedRecords.update((records) => {
         const deleted = records.find((record) => record.id === id);
-        if (deleted?.imageUrl) URL.revokeObjectURL(deleted.imageUrl);
+        if (deleted?.thumbnailUrl) URL.revokeObjectURL(deleted.thumbnailUrl);
         return records.filter((record) => record.id !== id);
       });
+      if (this.savedPhoto()?.id === id) this.closeSavedPhoto();
       this.status.set('Saved record deleted.');
     } catch (error: unknown) {
       this.addDiagnostic('IndexedDB', 'The saved record could not be deleted.', this.errorMessage(error));
@@ -436,18 +472,20 @@ export class App {
     try {
       const database = await this.openSavedRecordsDatabase();
       await new Promise<void>((resolve, reject) => {
-        const transaction = database.transaction('records', 'readwrite');
+        const transaction = database.transaction(['records', 'images'], 'readwrite');
         transaction.objectStore('records').clear();
+        transaction.objectStore('images').clear();
         transaction.oncomplete = () => resolve();
         transaction.onerror = () => reject(transaction.error);
         transaction.onabort = () => reject(transaction.error);
       });
       database.close();
       for (const record of this.savedRecords()) {
-        if (record.imageUrl) URL.revokeObjectURL(record.imageUrl);
+        if (record.thumbnailUrl) URL.revokeObjectURL(record.thumbnailUrl);
       }
       this.savedRecords.set([]);
       this.savedJson.set(null);
+      this.closeSavedPhoto();
       this.status.set('All saved results deleted.');
     } catch (error: unknown) {
       this.addDiagnostic('IndexedDB', 'Saved results could not be deleted.', this.errorMessage(error));
@@ -466,8 +504,9 @@ export class App {
       URL.revokeObjectURL(current);
     }
     for (const record of this.savedRecords()) {
-      if (record.imageUrl) URL.revokeObjectURL(record.imageUrl);
+      if (record.thumbnailUrl) URL.revokeObjectURL(record.thumbnailUrl);
     }
+    this.closeSavedPhoto();
   }
 
   protected ngOnInit(): void {
@@ -531,7 +570,7 @@ export class App {
       });
       database.close();
       for (const record of this.savedRecords()) {
-        if (record.imageUrl) URL.revokeObjectURL(record.imageUrl);
+        if (record.thumbnailUrl) URL.revokeObjectURL(record.thumbnailUrl);
       }
       this.savedRecords.set(records
         .sort((first, second) => second.savedAt.localeCompare(first.savedAt))
@@ -542,7 +581,7 @@ export class App {
   }
 
   private hydrateSavedRecord(record: StoredRecord): SavedRecord {
-    return { ...record, imageUrl: record.image instanceof Blob ? URL.createObjectURL(record.image) : null };
+    return { ...record, thumbnailUrl: record.thumbnail instanceof Blob ? URL.createObjectURL(record.thumbnail) : null };
   }
 
   protected savedRecordName(record: SavedRecord): string {
@@ -828,6 +867,27 @@ export class App {
     }
   }
 
+  private async createThumbnail(image: Blob): Promise<Blob> {
+    const decodedImage = await this.decodeImage(image);
+    const scale = Math.min(1, THUMBNAIL_MAX_DIMENSION / Math.max(decodedImage.width, decodedImage.height));
+    const canvas = document.createElement('canvas');
+    try {
+      canvas.width = Math.max(1, Math.round(decodedImage.width * scale));
+      canvas.height = Math.max(1, Math.round(decodedImage.height * scale));
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('Canvas 2D context is unavailable.');
+      context.drawImage(decodedImage.source, 0, 0, canvas.width, canvas.height);
+      return await new Promise<Blob>((resolve, reject) => canvas.toBlob((result) => {
+        if (result) resolve(result);
+        else reject(new Error('Thumbnail could not be created.'));
+      }, 'image/jpeg', THUMBNAIL_JPEG_QUALITY));
+    } finally {
+      canvas.width = 0;
+      canvas.height = 0;
+      decodedImage.release();
+    }
+  }
+
   private async createCropPassFromSource(source: CanvasImageSource, imageWidth: number, imageHeight: number, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }> {
     const sourceX = Math.round(crop.x * imageWidth);
     const sourceY = Math.round(crop.y * imageHeight);
@@ -967,10 +1027,31 @@ export class App {
 
   private openSavedRecordsDatabase(): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open('container-mark-reader', 1);
-      request.onupgradeneeded = () => {
-        if (!request.result.objectStoreNames.contains('records')) {
-          request.result.createObjectStore('records', { keyPath: 'id' });
+      const request = indexedDB.open('container-mark-reader', 2);
+      request.onupgradeneeded = (event) => {
+        const database = request.result;
+        const transaction = request.transaction;
+        if (!database.objectStoreNames.contains('records')) {
+          database.createObjectStore('records', { keyPath: 'id' });
+        }
+        if (!database.objectStoreNames.contains('images')) {
+          database.createObjectStore('images', { keyPath: 'id' });
+        }
+        if (event.oldVersion < 2 && transaction) {
+          const records = transaction.objectStore('records');
+          const images = transaction.objectStore('images');
+          records.openCursor().onsuccess = (event) => {
+            const cursor = (event.target as IDBRequest<IDBCursorWithValue | null>).result;
+            if (!cursor) return;
+            const record = cursor.value as StoredRecord;
+            if (record.image instanceof Blob) {
+              images.put({ id: record.id, image: record.image });
+              delete record.image;
+              record.hasImage = true;
+              cursor.update(record);
+            }
+            cursor.continue();
+          };
         }
       };
       request.onsuccess = () => resolve(request.result);
