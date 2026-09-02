@@ -22,6 +22,15 @@
 .saved-results-heading h2 {
   margin: 0;
 }
+.sync-warning {
+  background: #442d1f;
+  border-left: 3px solid #f2ad97;
+  color: #ffe5d8;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  margin: 12px 0 0;
+  padding: 8px 10px;
+}
 .saved-record-list {
   display: grid;
   gap: 8px;
@@ -55,6 +64,15 @@
 .saved-record-list small {
   display: block;
   font-size: 0.6rem;
+}
+.remote-status {
+  color: #f2ad97;
+  display: block;
+  font-size: 0.6rem;
+  margin-top: 3px;
+}
+.remote-status.remote-saved {
+  color: #a8d4b0;
 }
 .saved-json pre {
   max-height: 300px;

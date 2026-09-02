@@ -473,6 +473,70 @@ describe('App', () => {
     expect((fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.delete-all-button')?.disabled).toBe(true);
   });
 
+  it('should warn when unsynced saved results cannot upload while offline', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      savedRecords: { set(value: Array<{ id: string; savedAt: string; payload: unknown; hasImage: boolean; remoteStatus: 'not-saved-remotely'; thumbnailUrl: null }>): void };
+      syncWarning: { set(value: 'offline' | 'remote-unavailable' | null): void };
+    };
+    app.savedRecords.set([{ id: 'record-1', savedAt: '2026-08-24T10:00:00.000Z', payload: {}, hasImage: true, remoteStatus: 'not-saved-remotely', thumbnailUrl: null }]);
+    app.syncWarning.set('offline');
+    fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).querySelector('.sync-warning')?.textContent).toContain('You’re offline. Saved results will upload when your internet connection is restored.');
+  });
+
+  it('should warn when remote storage is temporarily unavailable', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      savedRecords: { set(value: Array<{ id: string; savedAt: string; payload: unknown; hasImage: boolean; remoteStatus: 'not-saved-remotely'; thumbnailUrl: null }>): void };
+      syncWarning: { set(value: 'offline' | 'remote-unavailable' | null): void };
+    };
+    app.savedRecords.set([{ id: 'record-1', savedAt: '2026-08-24T10:00:00.000Z', payload: {}, hasImage: true, remoteStatus: 'not-saved-remotely', thumbnailUrl: null }]);
+    app.syncWarning.set('remote-unavailable');
+    fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).querySelector('.sync-warning')?.textContent).toContain('Remote storage is temporarily unavailable.');
+  });
+
+  it('should upload pending saved results from oldest to newest', async () => {
+    const fixture = TestBed.createComponent(App);
+    type TestRecord = {
+      id: string;
+      savedAt: string;
+      payload: unknown;
+      thumbnail: Blob;
+      hasImage: boolean;
+      remoteStatus: 'not-saved-remotely' | 'saved-remotely';
+      thumbnailUrl: null;
+    };
+    const app = fixture.componentInstance as unknown as {
+      savedRecords: { set(value: TestRecord[]): void; update(updater: (records: TestRecord[]) => TestRecord[]): void };
+      loadStoredImage(id: string): Promise<Blob>;
+      markRecordSavedRemotely(id: string): Promise<void>;
+      syncSavedRecords(): Promise<void>;
+    };
+    const thumbnail = new Blob(['thumbnail'], { type: 'image/jpeg' });
+    app.savedRecords.set([
+      { id: 'newer', savedAt: '2026-08-24T11:00:00.000Z', payload: {}, thumbnail, hasImage: true, remoteStatus: 'not-saved-remotely', thumbnailUrl: null },
+      { id: 'older', savedAt: '2026-08-24T10:00:00.000Z', payload: {}, thumbnail, hasImage: true, remoteStatus: 'not-saved-remotely', thumbnailUrl: null },
+    ]);
+    app.loadStoredImage = vi.fn().mockResolvedValue(new Blob(['image'], { type: 'image/jpeg' }));
+    app.markRecordSavedRemotely = vi.fn().mockImplementation(async (id: string) => {
+      app.savedRecords.update((records) => records.map((record) => record.id === id ? { ...record, remoteStatus: 'saved-remotely' } : record));
+    });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      await app.syncSavedRecords();
+
+      expect(fetchMock.mock.calls.map(([, options]) => ((options as RequestInit).body as FormData).get('clientRecordId'))).toEqual(['older', 'newer']);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('should render raw text grouped by OCR scan', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
