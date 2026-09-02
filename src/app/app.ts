@@ -8,7 +8,6 @@ type CropRect = { x: number; y: number; width: number; height: number };
 type BoxBounds = { left: number; top: number; right: number; bottom: number };
 type CropResizeHandle = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 type DecodedImage = { source: CanvasImageSource; width: number; height: number; release: () => void };
-type OcrPass = { label: string; url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean };
 type RawScan = { label: string; lines: Array<{ text: string; confidence: number }>; durationMs: number };
 type StoredRecord = { id: string; savedAt: string; payload: unknown; thumbnail?: Blob; hasImage?: boolean; image?: Blob };
 type StoredImage = { id: string; image: Blob };
@@ -17,7 +16,7 @@ const DEFAULT_CROP: CropRect = { x: 0, y: 0, width: 1, height: 1 };
 const MAX_FULL_PHOTO_PIXELS = 4_000_000;
 const MAX_AUTO_CROP_FALLBACK_PIXELS = 1_000_000;
 const MAX_MANUAL_CROP_PIXELS = 4_000_000;
-const MAX_MANUAL_RETRY_CROP_PIXELS = 2_000_000;
+const MAX_MANUAL_RETRY_CROP_PIXELS = 4_000_000;
 const MAX_PREVIEW_RETRIES = 2;
 const OCR_PASS_TIMEOUT_MS = 45_000;
 const CROP_MEMORY_HEADROOM = 0.25;
@@ -320,36 +319,10 @@ export class App {
     try {
       this.status.set('Loading local PaddleOCR models...');
       this.status.set('Detecting painted text regions...');
-      const passes = await this.createOcrPasses(image);
-      const scanResults: OcrLine[][] = [];
       const recovery = { retried: false };
       this.rawText.set([]);
       this.rawScans.set([]);
-      try {
-        for (const [index, pass] of passes.entries()) {
-          this.status.set(`Scanning ${pass.label} (${index + 1} of ${passes.length})...`);
-          const startedAt = performance.now();
-          const detected = await this.detectWithRecovery(pass.url, recovery);
-          const scan = detected.map((line) => ({
-            ...line,
-            box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
-          }));
-          scanResults.push(scan);
-          const lines = this.deduplicateLines(scanResults.flat());
-          this.rawText.set(lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`));
-          this.rawScans.update((scans) => [...scans, {
-            label: pass.label,
-            lines: scan.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
-            durationMs: Math.round(performance.now() - startedAt),
-          }]);
-        }
-      } finally {
-        for (const pass of passes) {
-          if (pass.revokeUrl) {
-            URL.revokeObjectURL(pass.url);
-          }
-        }
-      }
+      const scanResults = await this.scanOcrPasses(image, recovery);
       const lines = this.deduplicateLines(scanResults.flat());
       const rawText = lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`);
       this.rawText.set(rawText);
@@ -374,7 +347,7 @@ export class App {
     } catch (error: unknown) {
       this.analysisSuccessful.set(false);
       this.processing.set(false);
-      this.addDiagnostic('ONNX OCR', 'Local OCR could not process this image.', this.errorMessage(error));
+      this.addDiagnostic('ONNX OCR', this.ocrFailureMessage(error), this.errorMessage(error));
     }
   }
 
@@ -694,28 +667,49 @@ export class App {
     return error instanceof Error ? error.message : String(error);
   }
 
-  private async createOcrPasses(image: Blob): Promise<OcrPass[]> {
-    const manualCrop = this.cropRect();
-    if (manualCrop) {
-      const passes: OcrPass[] = [];
-      try {
-        const originalPass = await this.createCropPass(image, manualCrop, 1, undefined, MAX_MANUAL_CROP_PIXELS);
-        passes.push({ label: 'Original size', ...originalPass });
-        const enlargedPass = await this.createCropPass(image, manualCrop, 2, undefined, MAX_MANUAL_RETRY_CROP_PIXELS);
-        passes.push({ label: `${enlargedPass.scale.toFixed(1)}x enlarged`, ...enlargedPass });
-        return passes;
-      } catch (error: unknown) {
-        this.releaseOcrPasses(passes);
-        throw error;
-      }
+  private ocrFailureMessage(error: unknown): string {
+    const message = this.errorMessage(error).toLowerCase();
+    if (error instanceof RangeError || /memory|allocate|canvas|bitmap|decoded image|webgl/i.test(message)) {
+      return 'The browser ran out of memory while preparing this image for OCR. Try a tighter crop or a smaller photo.';
     }
-    return [{ label: 'Full photo', ...await this.createCropPass(image, DEFAULT_CROP, 1, undefined, MAX_FULL_PHOTO_PIXELS) }];
+    return 'Local OCR could not process this image.';
   }
 
-  private releaseOcrPasses(passes: OcrPass[]): void {
-    for (const pass of passes) {
-      if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
+  private async scanOcrPasses(image: Blob, recovery: { retried: boolean }): Promise<OcrLine[][]> {
+    const manualCrop = this.cropRect();
+    const definitions = manualCrop
+      ? [
+        { label: 'Original size', crop: manualCrop, scale: 1, maximumPixels: MAX_MANUAL_CROP_PIXELS },
+        { label: 'Enlarged', crop: manualCrop, scale: 2, maximumPixels: MAX_MANUAL_RETRY_CROP_PIXELS },
+      ]
+      : [{ label: 'Full photo', crop: DEFAULT_CROP, scale: 1, maximumPixels: MAX_FULL_PHOTO_PIXELS }];
+    const scanResults: OcrLine[][] = [];
+
+    for (const [index, definition] of definitions.entries()) {
+      // Release each temporary OCR image before creating the next one.
+      const pass = await this.createCropPass(image, definition.crop, definition.scale, undefined, definition.maximumPixels);
+      try {
+        this.status.set(`Scanning ${definition.label}${definitions.length > 1 ? ` (${index + 1} of ${definitions.length})` : ''}...`);
+        const startedAt = performance.now();
+        const detected = await this.detectWithRecovery(pass.url, recovery);
+        const scan = detected.map((line) => ({
+          ...line,
+          box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
+        }));
+        scanResults.push(scan);
+        const lines = this.deduplicateLines(scanResults.flat());
+        this.rawText.set(lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`));
+        this.rawScans.update((scans) => [...scans, {
+          label: definition.label === 'Enlarged' ? `${pass.scale.toFixed(1)}x enlarged` : definition.label,
+          lines: scan.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
+          durationMs: Math.round(performance.now() - startedAt),
+        }]);
+      } finally {
+        if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
+      }
     }
+
+    return scanResults;
   }
 
   private cropPoint(event: PointerEvent): { x: number; y: number } | null {

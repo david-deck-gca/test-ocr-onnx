@@ -329,6 +329,42 @@ describe('App', () => {
     }
   });
 
+  it('should release each manual OCR pass before creating the next one', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      cropRect: { set(value: { x: number; y: number; width: number; height: number } | null): void };
+      createCropPass: ReturnType<typeof vi.fn>;
+      detectWithRecovery: ReturnType<typeof vi.fn>;
+      scanOcrPasses(image: Blob, recovery: { retried: boolean }): Promise<unknown>;
+    };
+    const events: string[] = [];
+    const revokeObjectUrl = vi.fn((url: string) => events.push(`revoke:${url}`));
+    vi.stubGlobal('URL', { revokeObjectURL: revokeObjectUrl });
+    app.cropRect.set({ x: 0.1, y: 0.1, width: 0.8, height: 0.8 });
+    app.createCropPass = vi.fn()
+      .mockImplementationOnce(async () => {
+        events.push('create:first');
+        return { url: 'blob:first', offsetX: 0, offsetY: 0, scale: 1, revokeUrl: true };
+      })
+      .mockImplementationOnce(async () => {
+        events.push('create:second');
+        return { url: 'blob:second', offsetX: 0, offsetY: 0, scale: 1.4, revokeUrl: true };
+      });
+    app.detectWithRecovery = vi.fn().mockResolvedValue([]);
+
+    try {
+      await app.scanOcrPasses(new Blob(['large-image'], { type: 'image/jpeg' }), { retried: false });
+
+      expect(events.indexOf('revoke:blob:first')).toBeLessThan(events.indexOf('create:second'));
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:first');
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:second');
+      expect(app.createCropPass).toHaveBeenNthCalledWith(1, expect.anything(), expect.anything(), 1, undefined, 4_000_000);
+      expect(app.createCropPass).toHaveBeenNthCalledWith(2, expect.anything(), expect.anything(), 2, undefined, 4_000_000);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('should retry a failed image preview with fresh object URLs', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -718,6 +754,18 @@ describe('App', () => {
 
     expect(app.cropOutputScale(4_000, 3_000, 1, undefined, 4_000_000)).toBeCloseTo(Math.sqrt(1 / 3));
     expect(app.cropOutputScale(2_000, 1_000, 2, undefined, 4_000_000)).toBeCloseTo(Math.sqrt(2));
+    const originalScale = app.cropOutputScale(4_032, 3_024, 1, undefined, 4_000_000);
+    const retryScale = app.cropOutputScale(4_032, 3_024, 2, undefined, 4_000_000);
+    expect(retryScale).toBeGreaterThanOrEqual(originalScale);
+  });
+
+  it('should identify browser memory failures while processing OCR', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      ocrFailureMessage(error: unknown): string;
+    };
+
+    expect(app.ocrFailureMessage(new RangeError('Canvas allocation failed'))).toContain('ran out of memory');
   });
 
   it('should reduce the crop pixel budget when available heap is low', () => {
@@ -747,29 +795,6 @@ describe('App', () => {
 
     try {
       expect(app.runtimeCropPixelBudget(2_000_000)).toBe(2_000_000);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it('should release every temporary OCR pass when pass preparation fails', () => {
-    const fixture = TestBed.createComponent(App);
-    const app = fixture.componentInstance as unknown as {
-      releaseOcrPasses(passes: Array<{ url: string; revokeUrl: boolean }>): void;
-    };
-    const revokeObjectUrl = vi.fn();
-    vi.stubGlobal('URL', { revokeObjectURL: revokeObjectUrl });
-
-    try {
-      app.releaseOcrPasses([
-        { url: 'blob:first', revokeUrl: true },
-        { url: 'blob:source', revokeUrl: false },
-        { url: 'blob:second', revokeUrl: true },
-      ]);
-
-      expect(revokeObjectUrl).toHaveBeenCalledTimes(2);
-      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:first');
-      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:second');
     } finally {
       vi.unstubAllGlobals();
     }
