@@ -4,6 +4,7 @@ import { OcrService } from './ocr.service';
 type CaptureMode = 'auto-crop' | 'manual-crop';
 type FieldKey = 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters' | 'capacityCubicMeters' | 'capacityCubicFeet';
 type OcrLine = { text: string; mean: number; box?: number[][] };
+type UnwarpGeometry = { rotation: number; curvature: number; reliable: boolean };
 type CropRect = { x: number; y: number; width: number; height: number };
 type BoxBounds = { left: number; top: number; right: number; bottom: number };
 type CropResizeHandle = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
@@ -21,21 +22,14 @@ const MAX_PREVIEW_RETRIES = 2;
 const OCR_PASS_TIMEOUT_MS = 45_000;
 const CROP_MEMORY_HEADROOM = 0.25;
 const CROP_BYTES_PER_PIXEL = 16;
+// Use a strong enough curvature correction to be visible on container sides.
+const DEFAULT_AUTO_CURVATURE = 0.25;
+const CYLINDER_UNWARP_MAX_SEGMENTS = 512;
 const THUMBNAIL_MAX_DIMENSION = 160;
 const THUMBNAIL_JPEG_QUALITY = 0.8;
 
 function defaultCaptureMode(): CaptureMode {
-  if (typeof navigator === 'undefined') {
-    return 'manual-crop';
-  }
-
-  const userAgent = navigator.userAgent;
-  const isAndroid = /Android/i.test(userAgent);
-  // iPadOS can identify itself as macOS when requesting desktop sites.
-  const isIos = /iPad|iPhone|iPod/i.test(userAgent)
-    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-
-  return isAndroid || isIos ? 'manual-crop' : 'auto-crop';
+  return 'manual-crop';
 }
 
 interface ContainerField {
@@ -62,12 +56,15 @@ export class App {
   protected readonly videoPreview = viewChild<ElementRef<HTMLVideoElement>>('videoPreview');
   protected readonly sourceName = signal('');
   protected readonly previewUrl = signal<string | null>(null);
+  protected readonly unwarpedCropUrl = signal<string | null>(null);
   protected readonly imageBlob = signal<Blob | null>(null);
   protected readonly cropRect = signal<CropRect | null>(null);
   protected readonly cropDraft = signal<CropRect>(DEFAULT_CROP);
   protected readonly applyingCrop = signal(false);
   protected readonly cropResizeHandles: CropResizeHandle[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
   protected readonly captureMode = signal<CaptureMode>(defaultCaptureMode());
+  protected readonly unwarpSelectedRegion = signal(false);
+  protected readonly unwarpRotation = signal(0);
   protected readonly cameraOpen = signal(false);
   protected readonly processing = signal(false);
   protected readonly analysisSuccessful = signal(false);
@@ -256,8 +253,33 @@ export class App {
     this.cameraOpen.set(false);
   }
 
-  protected setCaptureMode(mode: CaptureMode): void {
+  protected async setCaptureMode(mode: CaptureMode): Promise<void> {
+    if (this.processing() || this.applyingCrop()) return;
     this.captureMode.set(mode);
+    if (mode !== 'auto-crop') return;
+
+    const image = this.imageBlob();
+    if (!image) return;
+    this.clearFields();
+    this.cropRect.set(null);
+    this.cropDraft.set(DEFAULT_CROP);
+    this.clearUnwarpedCropPreview();
+    await this.prepareInitialCrop(image, this.imageSelection);
+  }
+
+  protected setUnwarpSelectedRegion(enabled: boolean): void {
+    if (this.processing() || this.applyingCrop()) return;
+    this.unwarpSelectedRegion.set(enabled);
+    if (!enabled) {
+      this.unwarpRotation.set(0);
+      this.clearUnwarpedCropPreview();
+    }
+  }
+
+  protected setUnwarpRotation(degrees: number): void {
+    if (this.processing() || this.applyingCrop()) return;
+    this.unwarpRotation.set(Math.max(-10, Math.min(10, degrees)));
+    this.clearUnwarpedCropPreview();
   }
 
   protected retryPreview(failedUrl: string): void {
@@ -308,6 +330,7 @@ export class App {
     }
     this.analysisSuccessful.set(false);
     this.processing.set(true);
+    this.clearUnwarpedCropPreview();
     this.diagnostics.set([]);
     this.status.set('Preparing local OCR models...');
     const imageUrl = this.previewUrl();
@@ -323,7 +346,7 @@ export class App {
       this.rawText.set([]);
       this.rawScans.set([]);
       const scanResults = await this.scanOcrPasses(image, recovery);
-      const lines = this.deduplicateLines(scanResults.flat());
+      const lines = this.selectBestOcrLines(scanResults);
       const rawText = lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`);
       this.rawText.set(rawText);
       const fields = this.extractFields(lines);
@@ -345,6 +368,7 @@ export class App {
       this.analysisSuccessful.set(true);
       this.processing.set(false);
     } catch (error: unknown) {
+      this.clearUnwarpedCropPreview();
       this.analysisSuccessful.set(false);
       this.processing.set(false);
       this.addDiagnostic('ONNX OCR', this.ocrFailureMessage(error), this.errorMessage(error));
@@ -472,10 +496,12 @@ export class App {
   protected ngOnDestroy(): void {
     this.closeCamera();
     this.cancelPreviewLoad(new Error('The component was destroyed.'));
+    this.clearUnwarpedCropPreview();
     const current = this.previewUrl();
     if (current) {
       URL.revokeObjectURL(current);
     }
+    this.clearUnwarpedCropPreview();
     for (const record of this.savedRecords()) {
       if (record.thumbnailUrl) URL.revokeObjectURL(record.thumbnailUrl);
     }
@@ -501,8 +527,11 @@ export class App {
     this.previewRetries = 0;
     this.sourceName.set(name);
     this.applyingCrop.set(false);
+    this.captureMode.set('manual-crop');
     this.cropRect.set(null);
     this.cropDraft.set(DEFAULT_CROP);
+    this.unwarpSelectedRegion.set(false);
+    this.unwarpRotation.set(0);
     this.rawText.set([]);
     this.rawScans.set([]);
     const selection = ++this.imageSelection;
@@ -677,21 +706,33 @@ export class App {
 
   private async scanOcrPasses(image: Blob, recovery: { retried: boolean }): Promise<OcrLine[][]> {
     const manualCrop = this.cropRect();
+    const shouldUnwarp = Boolean(manualCrop && this.unwarpSelectedRegion());
     const definitions = manualCrop
       ? [
-        { label: 'Original size', crop: manualCrop, scale: 1, maximumPixels: MAX_MANUAL_CROP_PIXELS },
-        { label: 'Enlarged', crop: manualCrop, scale: 2, maximumPixels: MAX_MANUAL_RETRY_CROP_PIXELS },
+        { label: 'Original size', crop: manualCrop, scale: 1, maximumPixels: MAX_MANUAL_CROP_PIXELS, unwarp: false, rotation: 0, curvature: 0 },
+        { label: shouldUnwarp ? 'Unwarped' : 'Enlarged', crop: manualCrop, scale: shouldUnwarp ? 1 : 2, maximumPixels: MAX_MANUAL_RETRY_CROP_PIXELS, unwarp: shouldUnwarp, rotation: this.unwarpRotation(), curvature: shouldUnwarp ? DEFAULT_AUTO_CURVATURE : 0 },
+        ...(shouldUnwarp ? [{ label: '2x unwarped', crop: manualCrop, scale: 2, maximumPixels: MAX_MANUAL_RETRY_CROP_PIXELS, unwarp: true, rotation: this.unwarpRotation(), curvature: DEFAULT_AUTO_CURVATURE }] : []),
       ]
-      : [{ label: 'Full photo', crop: DEFAULT_CROP, scale: 1, maximumPixels: MAX_FULL_PHOTO_PIXELS }];
+      : [{ label: 'Full photo', crop: DEFAULT_CROP, scale: 1, maximumPixels: MAX_FULL_PHOTO_PIXELS, unwarp: false, rotation: 0, curvature: 0 }];
     const scanResults: OcrLine[][] = [];
 
     for (const [index, definition] of definitions.entries()) {
+      if (definition.unwarp && scanResults[0]?.length) {
+        const geometry = this.estimateUnwarpGeometry(scanResults[0]);
+        definition.rotation += geometry.rotation;
+        definition.curvature = geometry.reliable ? definition.curvature : 0;
+      }
       // Release each temporary OCR image before creating the next one.
-      const pass = await this.createCropPass(image, definition.crop, definition.scale, undefined, definition.maximumPixels);
+      const pass = await this.createCropPass(image, definition.crop, definition.scale, undefined, definition.maximumPixels, definition.unwarp, definition.rotation, definition.curvature);
+      let retainPass = false;
       try {
         this.status.set(`Scanning ${definition.label}${definitions.length > 1 ? ` (${index + 1} of ${definitions.length})` : ''}...`);
         const startedAt = performance.now();
         const detected = await this.detectWithRecovery(pass.url, recovery);
+        if (manualCrop && definition.unwarp && !this.unwarpedCropUrl()) {
+          this.unwarpedCropUrl.set(pass.url);
+          retainPass = true;
+        }
         const scan = detected.map((line) => ({
           ...line,
           box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
@@ -705,11 +746,53 @@ export class App {
           durationMs: Math.round(performance.now() - startedAt),
         }]);
       } finally {
-        if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
+        if (pass.revokeUrl && !retainPass) URL.revokeObjectURL(pass.url);
       }
     }
 
     return scanResults;
+  }
+
+  private estimateUnwarpGeometry(lines: OcrLine[]): UnwarpGeometry {
+    const angles = lines
+      .filter((line) => line.mean >= 0.5 && line.box && line.box.length >= 4)
+      .map((line) => {
+        const box = line.box!;
+        let longest: number[][] = [];
+        for (let index = 0; index < box.length; index++) {
+          const edge = [box[index], box[(index + 1) % box.length]];
+          const longestWidth = longest.length === 2 ? Math.abs(longest[1][0] - longest[0][0]) : 0;
+          if (Math.abs(edge[1][0] - edge[0][0]) > longestWidth) longest = edge;
+        }
+        return Math.atan2(longest[1][1] - longest[0][1], longest[1][0] - longest[0][0]) * 180 / Math.PI;
+      })
+      .filter((angle) => Number.isFinite(angle) && Math.abs(angle) <= 20)
+      .sort((first, second) => first - second);
+    if (angles.length < 2) return { rotation: 0, curvature: 0, reliable: false };
+    const median = angles[Math.floor(angles.length / 2)];
+    return { rotation: Math.max(-10, Math.min(10, -median)), curvature: DEFAULT_AUTO_CURVATURE, reliable: true };
+  }
+
+  private clearUnwarpedCropPreview(): void {
+    const url = this.unwarpedCropUrl();
+    if (url) URL.revokeObjectURL(url);
+    this.unwarpedCropUrl.set(null);
+  }
+
+  private selectBestOcrLines(results: OcrLine[][]): OcrLine[] {
+    return results
+      .map((result) => this.deduplicateLines(result))
+      .sort((first, second) => this.ocrResultScore(second) - this.ocrResultScore(first))[0] ?? [];
+  }
+
+  private ocrResultScore(lines: OcrLine[]): number {
+    const fields = this.extractFields(lines);
+    const detectedFields = Object.values(fields).filter((field) => field.value).length;
+    const confidence = lines.reduce((total, line) => total + line.mean, 0);
+    return detectedFields * 10
+      + (fields.containerId.value ? 100 : 0)
+      + (this.validateContainerId(fields.containerId.value) ? 100 : 0)
+      + confidence;
   }
 
   private cropPoint(event: PointerEvent): { x: number; y: number } | null {
@@ -852,10 +935,10 @@ export class App {
     };
   }
 
-  private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }> {
+  private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number, unwarp = false, rotation = 0, curvature = 0): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }> {
     const decodedImage = await this.decodeImage(image);
     try {
-      return await this.createCropPassFromSource(decodedImage.source, decodedImage.width, decodedImage.height, crop, scale, maximumWidth, maximumPixels);
+      return await this.createCropPassFromSource(decodedImage.source, decodedImage.width, decodedImage.height, crop, scale, maximumWidth, maximumPixels, unwarp, rotation, curvature);
     } finally {
       decodedImage.release();
     }
@@ -882,19 +965,28 @@ export class App {
     }
   }
 
-  private async createCropPassFromSource(source: CanvasImageSource, imageWidth: number, imageHeight: number, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }> {
+  private async createCropPassFromSource(source: CanvasImageSource, imageWidth: number, imageHeight: number, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number, unwarp = false, rotation = 0, curvature = 0): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }> {
     const sourceX = Math.round(crop.x * imageWidth);
     const sourceY = Math.round(crop.y * imageHeight);
     const sourceWidth = Math.max(1, Math.round(crop.width * imageWidth));
     const sourceHeight = Math.max(1, Math.round(crop.height * imageHeight));
     const outputScale = this.cropOutputScale(sourceWidth, sourceHeight, scale, maximumWidth, this.runtimeCropPixelBudget(maximumPixels));
+    const baseWidth = Math.max(1, Math.round(sourceWidth * outputScale));
+    const baseHeight = Math.max(1, Math.round(sourceHeight * outputScale));
+    const radians = unwarp ? rotation * Math.PI / 180 : 0;
+    const outputWidth = Math.max(1, Math.ceil(Math.abs(baseWidth * Math.cos(radians)) + Math.abs(baseHeight * Math.sin(radians))));
+    const outputHeight = Math.max(1, Math.ceil(Math.abs(baseWidth * Math.sin(radians)) + Math.abs(baseHeight * Math.cos(radians))));
     const canvas = document.createElement('canvas');
     try {
-      canvas.width = Math.max(1, Math.round(sourceWidth * outputScale));
-      canvas.height = Math.max(1, Math.round(sourceHeight * outputScale));
+      canvas.width = outputWidth;
+      canvas.height = outputHeight;
       const context = canvas.getContext('2d');
       if (!context) throw new Error('Canvas 2D context is unavailable.');
-      context.drawImage(source, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+      if (unwarp) {
+        this.drawCylindricalUnwarp(context, source, sourceX, sourceY, sourceWidth, sourceHeight, baseWidth, baseHeight, canvas.width, canvas.height, radians, curvature);
+      } else {
+        context.drawImage(source, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, baseWidth, baseHeight);
+      }
       const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((result) => {
         if (result) resolve(result);
         else reject(new Error('Manual crop could not be created.'));
@@ -905,6 +997,43 @@ export class App {
       canvas.width = 0;
       canvas.height = 0;
     }
+  }
+
+  private drawCylindricalUnwarp(context: CanvasRenderingContext2D, source: CanvasImageSource, sourceX: number, sourceY: number, sourceWidth: number, sourceHeight: number, baseWidth: number, baseHeight: number, outputWidth: number, outputHeight: number, rotation: number, curvature: number): void {
+    // Approximate a vertical cylinder by mapping horizontal strips from the projected arc.
+    const halfAngle = (Math.PI / 2) * Math.min(0.9, Math.abs(curvature));
+    const edgeSin = Math.sin(halfAngle);
+    const segments = Math.min(CYLINDER_UNWARP_MAX_SEGMENTS, Math.max(32, Math.ceil(baseWidth / 8)));
+    const sourceAt = (outputX: number) => {
+      const normalized = outputX / baseWidth * 2 - 1;
+      if (Math.abs(curvature) < 0.001) return sourceX + ((normalized + 1) / 2) * sourceWidth;
+      const projected = Math.sin(normalized * halfAngle) / edgeSin;
+      return sourceX + ((projected + 1) / 2) * sourceWidth;
+    };
+
+    context.save();
+    context.translate(outputWidth / 2, outputHeight / 2);
+    context.rotate(rotation);
+    for (let segment = 0; segment < segments; segment++) {
+      const outputLeft = Math.round(segment * baseWidth / segments);
+      const outputRight = Math.round((segment + 1) * baseWidth / segments);
+      const sourceLeft = sourceAt(outputLeft);
+      const sourceRight = sourceAt(outputRight);
+      const normalized = ((outputLeft + outputRight) / 2) / baseWidth * 2 - 1;
+      const verticalShift = curvature * normalized * normalized * baseHeight * 0.08;
+      context.drawImage(
+        source,
+        sourceLeft,
+        sourceY,
+        Math.max(1, sourceRight - sourceLeft),
+        sourceHeight,
+        outputLeft - baseWidth / 2,
+        -baseHeight / 2 + verticalShift,
+        Math.max(1, outputRight - outputLeft),
+        outputHeight,
+      );
+    }
+    context.restore();
   }
 
   private cropOutputScale(sourceWidth: number, sourceHeight: number, requestedScale: number, maximumWidth?: number, maximumPixels?: number): number {
