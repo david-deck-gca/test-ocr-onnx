@@ -1234,13 +1234,14 @@ export class App {
 
     const weightAfter = (label: RegExp, unit: 'KG' | 'LB') => {
       const numberText = (value: string) => value.trim();
+      const unitPattern = unit === 'LB' ? '(?:LBS?|LS|BS)' : 'KG';
       const labeledWeight = text
         .map((line) => {
           const labelMatch = line.normalized.match(label);
           const valueText = labelMatch?.index === undefined
             ? undefined
             : line.normalized.slice(labelMatch.index + labelMatch[0].length);
-          return { line, match: valueText?.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unit}`)) };
+          return { line, match: valueText?.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unitPattern}`)) };
         })
         .filter(({ match }) => match)
         .sort((first, second) => second.line.mean - first.line.mean)[0];
@@ -1258,7 +1259,7 @@ export class App {
       const labelCenter = center(labelLine);
       if (labelCenter) {
         const closestWeight = text
-          .map((line) => ({ line, match: line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unit}`)), center: center(line) }))
+          .map((line) => ({ line, match: line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unitPattern}`)), center: center(line) }))
           .filter(({ match, center }) => match && center)
           .sort((first, second) => {
             // Container markings list a label before its weight rows; an earlier row belongs to the preceding label.
@@ -1275,7 +1276,7 @@ export class App {
       }
       const nearby = text.slice(labelIndex);
       for (const line of nearby) {
-        const match = line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unit}`));
+        const match = line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unitPattern}`));
         if (match) {
           return { value: numberText(match[1]), confidence: line.mean };
         }
@@ -1296,8 +1297,9 @@ export class App {
       }
       return candidates.sort((first, second) => second.confidence - first.confidence)[0];
     };
-    const mpgmKg = weightAfter(/\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT|\bMAX\.?\s*GR\.?/, 'KG');
-    const mpgmLb = weightAfter(/\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT|\bMAX\.?\s*GR\.?/, 'LB');
+    const grossLabel = /\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT|\bMAX\.?\s*GR(?:[O0]SS)?\.?/;
+    const mpgmKg = weightAfter(grossLabel, 'KG');
+    const mpgmLb = weightAfter(grossLabel, 'LB');
     const tareKg = weightAfter(/\bTARE\b/, 'KG');
     const tareLb = weightAfter(/\bTARE\b/, 'LB');
     const payloadLabel = /\bPAY(?:LOAD|J?LAD|JLOAD)(?=\s|\d|$)|\bNET(?:\s*WEIGHT)?\b/;

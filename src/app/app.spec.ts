@@ -1099,6 +1099,40 @@ describe('App', () => {
     expect(fields['capacityCubicFeet'].value).toBe('162');
   });
 
+  it('should keep gross pounds attached to the gross row when OCR confuses the L in LBS', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'MAXGROSSWEIGHT:4300KG/9480ls', mean: 0.95 },
+      { text: 'TARE WEIGHT:773KG /1704Lbs', mean: 0.95 },
+    ]);
+
+    expect(fields['mpgmKg'].value).toBe('4300');
+    expect(fields['mpgmLb'].value).toBe('9480');
+    expect(fields['tareKg'].value).toBe('773');
+    expect(fields['tareLb'].value).toBe('1704');
+  });
+
+  it('should recognize a zero-for-O gross label and standard pounds suffix', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'MAX GR0SS WEIGHT : 4300KG/9480lbs', mean: 0.94 },
+      { text: 'TARE WEIGHT:773KG /1704Lbs', mean: 0.96 },
+    ]);
+
+    expect(fields['mpgmKg'].value).toBe('4300');
+    expect(fields['mpgmLb'].value).toBe('9480');
+    expect(fields['tareKg'].value).toBe('773');
+    expect(fields['tareLb'].value).toBe('1704');
+  });
+
   it('should recover a checksum-valid container ID split across OCR regions', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
