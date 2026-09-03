@@ -2,7 +2,7 @@ import { Component, ElementRef, Injector, afterNextRender, computed, inject, sig
 import { OcrService } from './ocr.service';
 
 type CaptureMode = 'auto-crop' | 'manual-crop';
-type FieldKey = 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters' | 'capacityCubicMeters' | 'capacityCubicFeet';
+type FieldKey = 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters' | 'capacityUsGallons' | 'capacityCubicMeters' | 'capacityCubicFeet';
 type OcrLine = { text: string; mean: number; box?: number[][] };
 type UnwarpGeometry = { rotation: number; curvature: number; reliable: boolean };
 type CropRect = { x: number; y: number; width: number; height: number };
@@ -85,6 +85,7 @@ export class App {
     payloadKg: { value: '', unit: 'KG' },
     payloadLb: { value: '', unit: 'LB' },
     capacityLiters: { value: '', unit: 'L' },
+    capacityUsGallons: { value: '', unit: 'US GAL' },
     capacityCubicMeters: { value: '', unit: 'CU.M.' },
     capacityCubicFeet: { value: '', unit: 'CU.FT.' },
   });
@@ -554,6 +555,7 @@ export class App {
       payloadKg: { value: '', unit: 'KG' },
       payloadLb: { value: '', unit: 'LB' },
       capacityLiters: { value: '', unit: 'L' },
+      capacityUsGallons: { value: '', unit: 'US GAL' },
       capacityCubicMeters: { value: '', unit: 'CU.M.' },
       capacityCubicFeet: { value: '', unit: 'CU.FT.' },
     });
@@ -1139,6 +1141,7 @@ export class App {
         payload: { kg: fields.payloadKg, lb: fields.payloadLb },
         capacity: {
           liters: fields.capacityLiters,
+          usGallons: fields.capacityUsGallons,
           cubicMeters: fields.capacityCubicMeters,
           cubicFeet: fields.capacityCubicFeet,
         },
@@ -1189,6 +1192,7 @@ export class App {
       tareKg: { value: '', unit: 'KG' }, tareLb: { value: '', unit: 'LB' },
       payloadKg: { value: '', unit: 'KG' }, payloadLb: { value: '', unit: 'LB' },
       capacityLiters: { value: '', unit: 'L' },
+      capacityUsGallons: { value: '', unit: 'US GAL' },
       capacityCubicMeters: { value: '', unit: 'CU.M.' },
       capacityCubicFeet: { value: '', unit: 'CU.FT.' },
     };
@@ -1295,6 +1299,10 @@ export class App {
           }
         }
       }
+      for (const line of text) {
+        const match = line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unit.source}`));
+        if (match) candidates.push({ value: match[1].trim(), confidence: line.mean });
+      }
       return candidates.sort((first, second) => second.confidence - first.confidence)[0];
     };
     const grossLabel = /\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT|\bMAX\.?\s*GR(?:[O0]SS)?\.?/;
@@ -1306,6 +1314,7 @@ export class App {
     const payloadKg = weightAfter(payloadLabel, 'KG');
     const payloadLb = weightAfter(payloadLabel, 'LB');
     const capacityLiters = capacityAfter(/\bCAP(?:ACITY|CITY)\b|\bCAPAC\.?\b/, /L\b/);
+    const capacityUsGallons = capacityAfter(/\bCAP(?:ACITY|CITY)\b|\bCAPAC\.?\b/, /US\s*GAL\b/);
     const capacityCubicMeters = capacityAfter(/\bCU\.?\s*CAP\.?/, /CU\.?\s*M\.?/);
     const capacityCubicFeet = capacityAfter(/\bCU\.?\s*CAP\.?/, /CU\.?\s*FT\.?/);
     fields.mpgmKg = { value: mpgmKg?.value ?? '', unit: 'KG', confidence: mpgmKg?.confidence };
@@ -1320,6 +1329,7 @@ export class App {
       : { value: '', unit: 'LB' };
     this.recoverMissingWeightRows(fields, text);
     fields.capacityLiters = { value: capacityLiters?.value ?? '', unit: 'L', confidence: capacityLiters?.confidence };
+    fields.capacityUsGallons = { value: capacityUsGallons?.value ?? '', unit: 'US GAL', confidence: capacityUsGallons?.confidence };
     fields.capacityCubicMeters = { value: capacityCubicMeters?.value ?? '', unit: 'CU.M.', confidence: capacityCubicMeters?.confidence };
     fields.capacityCubicFeet = { value: capacityCubicFeet?.value ?? '', unit: 'CU.FT.', confidence: capacityCubicFeet?.confidence };
     return fields;

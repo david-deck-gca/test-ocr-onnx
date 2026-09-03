@@ -131,6 +131,25 @@ describe('App', () => {
     expect(rows[1].querySelector('input')?.getAttribute('aria-label')).toBe('CU.CAP. CU.FT.');
   });
 
+  it('should display the capacity label only on the first liters or gallons row', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      analysisSuccessful: { set(value: boolean): void };
+      fields: { update(updater: (fields: Record<string, { value: string }>) => Record<string, { value: string }>): void };
+    };
+    app.analysisSuccessful.set(true);
+    app.fields.update((fields) => ({
+      ...fields,
+      capacityLiters: { ...fields['capacityLiters'], value: '25,000' },
+      capacityUsGallons: { ...fields['capacityUsGallons'], value: '6,600' },
+    }));
+    fixture.detectChanges();
+
+    const rows = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLTableRowElement>('.capacity-row'));
+    expect(rows.map((row) => row.querySelector('th')?.textContent?.trim())).toEqual(['CAPACITY', '']);
+    expect(rows[1].querySelector('th')?.getAttribute('aria-hidden')).toBe('true');
+  });
+
   it('should render validation and units in the table unit column', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -994,6 +1013,21 @@ describe('App', () => {
 
     expect(fields['payloadKg'].value).toBe('32.350');
     expect(fields['capacityLiters'].value).toBe('25,000');
+  });
+
+  it('should detect unlabeled liter and US gallon capacities', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
+    };
+
+    const fields = app.extractFields([
+      { text: '25,000 L', mean: 0.94 },
+      { text: '6,600 US Gal', mean: 0.96 },
+    ]);
+
+    expect(fields['capacityLiters'].value).toBe('25,000');
+    expect(fields['capacityUsGallons'].value).toBe('6,600');
   });
 
   it('should extract a payload when OCR joins its misspelled label to the value', () => {
