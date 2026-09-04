@@ -1175,7 +1175,7 @@ describe('App', () => {
     };
 
     const fields = app.extractFields([
-      { text: 'MAXGROSSWEIGHT:4300KG/9480ls', mean: 0.95 },
+      { text: 'MAXGROSSWEIGHT:4300KG/9480lbs', mean: 0.95 },
       { text: 'TARE WEIGHT:773KG /1704Lbs', mean: 0.95 },
     ]);
 
@@ -1200,6 +1200,40 @@ describe('App', () => {
     expect(fields['mpgmLb'].value).toBe('9480');
     expect(fields['tareKg'].value).toBe('773');
     expect(fields['tareLb'].value).toBe('1704');
+  });
+
+  it('should infer the opposite unit for an unreadable slash-paired weight', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string; inferred?: boolean }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'MAX GROSS WEIGHT: 4300KG/9480s', mean: 0.95 },
+      { text: 'TARE WEIGHT:773KG/1704s', mean: 0.95 },
+    ]);
+
+    expect(fields['mpgmKg'].value).toBe('4300');
+    expect(fields['mpgmLb'].value).toBe('9480');
+    expect(fields['mpgmLb'].inferred).toBe(true);
+    expect(fields['tareKg'].value).toBe('773');
+    expect(fields['tareLb'].value).toBe('1704');
+    expect(fields['tareLb'].inferred).toBe(true);
+  });
+
+  it('should preserve an explicitly readable unit on a slash-paired weight', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string; inferred?: boolean }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'MAX GROSS WEIGHT: 4300KG/9480LBS', mean: 0.95 },
+    ]);
+
+    expect(fields['mpgmKg'].value).toBe('4300');
+    expect(fields['mpgmLb'].value).toBe('9480');
+    expect(fields['mpgmLb'].inferred).toBe(false);
   });
 
   it('should recover a checksum-valid container ID split across OCR regions', () => {

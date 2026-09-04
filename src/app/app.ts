@@ -1404,20 +1404,36 @@ export class App {
     }
 
     const weightAfter = (label: RegExp, unit: 'KG' | 'LB') => {
-      const numberText = (value: string) => value.trim();
-      const unitPattern = unit === 'LB' ? '(?:LBS?|LS|BS)' : 'KG';
+      const parseWeight = (line: OcrLine & { normalized: string }, source = line.normalized): { value: string; confidence: number; inferred?: boolean } | undefined => {
+        const explicitWeights = /(?<value>\d[\d ,.]*?)\s*(?<unit>KG|LBS?)/g;
+        for (const match of source.matchAll(explicitWeights)) {
+          const firstUnit = match.groups?.['unit']?.startsWith('K') ? 'KG' : 'LB';
+          if (firstUnit === unit) {
+            return { value: match.groups?.['value']?.trim() ?? '', confidence: line.mean };
+          }
+          const end = (match.index ?? 0) + match[0].length;
+          const paired = source.slice(end).match(/^\s*\/\s*(\d[\d ,.]*?)\s*([A-Z]+)/);
+          if (!paired) continue;
+          const readableUnit = paired[2] === 'KG' ? 'KG' : /^(?:LB|LBS)$/.test(paired[2]) ? 'LB' : undefined;
+          const pairedUnit = readableUnit ?? (firstUnit === 'KG' ? 'LB' : 'KG');
+          if (pairedUnit === unit) {
+            return { value: paired[1].trim(), confidence: line.mean, inferred: !readableUnit };
+          }
+        }
+        return undefined;
+      };
       const labeledWeight = text
         .map((line) => {
           const labelMatch = line.normalized.match(label);
-          const valueText = labelMatch?.index === undefined
+          const source = labelMatch?.index === undefined
             ? undefined
             : line.normalized.slice(labelMatch.index + labelMatch[0].length);
-          return { line, match: valueText?.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unitPattern}`)) };
+          return { line, match: source === undefined ? undefined : parseWeight(line, source) };
         })
         .filter(({ match }) => match)
         .sort((first, second) => second.line.mean - first.line.mean)[0];
       if (labeledWeight?.match) {
-        return { value: numberText(labeledWeight.match[1]), confidence: labeledWeight.line.mean };
+        return labeledWeight.match;
       }
       const labelIndex = text.findIndex((line) => label.test(line.normalized));
       if (labelIndex < 0) return undefined;
@@ -1430,7 +1446,7 @@ export class App {
       const labelCenter = center(labelLine);
       if (labelCenter) {
         const closestWeight = text
-          .map((line) => ({ line, match: line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unitPattern}`)), center: center(line) }))
+          .map((line) => ({ line, match: parseWeight(line), center: center(line) }))
           .filter(({ match, center }) => match && center)
           .sort((first, second) => {
             // Container markings list a label before its weight rows; an earlier row belongs to the preceding label.
@@ -1442,14 +1458,14 @@ export class App {
             return firstDistance - secondDistance;
           })[0];
         if (closestWeight?.match) {
-          return { value: numberText(closestWeight.match[1]), confidence: closestWeight.line.mean };
+          return closestWeight.match;
         }
       }
       const nearby = text.slice(labelIndex);
       for (const line of nearby) {
-        const match = line.normalized.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unitPattern}`));
+        const match = parseWeight(line);
         if (match) {
-          return { value: numberText(match[1]), confidence: line.mean };
+          return match;
         }
       }
       return undefined;
@@ -1484,15 +1500,15 @@ export class App {
     const capacityUsGallons = capacityAfter(/\bCAP(?:ACITY|CITY)\b|\bCAPAC\.?\b/, /US\s*GAL\b/);
     const capacityCubicMeters = capacityAfter(/\bCU\.?\s*CAP\.?/, /CU\.?\s*M\.?/);
     const capacityCubicFeet = capacityAfter(/\bCU\.?\s*CAP\.?/, /CU\.?\s*FT\.?/);
-    fields.mpgmKg = { value: mpgmKg?.value ?? '', unit: 'KG', confidence: mpgmKg?.confidence };
-    fields.mpgmLb = { value: mpgmLb?.value ?? '', unit: 'LB', confidence: mpgmLb?.confidence };
-    fields.tareKg = { value: tareKg?.value ?? '', unit: 'KG', confidence: tareKg?.confidence };
-    fields.tareLb = { value: tareLb?.value ?? '', unit: 'LB', confidence: tareLb?.confidence };
+    fields.mpgmKg = { value: mpgmKg?.value ?? '', unit: 'KG', confidence: mpgmKg?.confidence, inferred: mpgmKg?.inferred };
+    fields.mpgmLb = { value: mpgmLb?.value ?? '', unit: 'LB', confidence: mpgmLb?.confidence, inferred: mpgmLb?.inferred };
+    fields.tareKg = { value: tareKg?.value ?? '', unit: 'KG', confidence: tareKg?.confidence, inferred: tareKg?.inferred };
+    fields.tareLb = { value: tareLb?.value ?? '', unit: 'LB', confidence: tareLb?.confidence, inferred: tareLb?.inferred };
     fields.payloadKg = payloadKg
-      ? { value: payloadKg.value, unit: 'KG', confidence: payloadKg.confidence }
+      ? { value: payloadKg.value, unit: 'KG', confidence: payloadKg.confidence, inferred: payloadKg.inferred }
       : { value: '', unit: 'KG' };
     fields.payloadLb = payloadLb
-      ? { value: payloadLb.value, unit: 'LB', confidence: payloadLb.confidence }
+      ? { value: payloadLb.value, unit: 'LB', confidence: payloadLb.confidence, inferred: payloadLb.inferred }
       : { value: '', unit: 'LB' };
     this.recoverMissingWeightRows(fields, text);
     fields.capacityLiters = { value: capacityLiters?.value ?? '', unit: 'L', confidence: capacityLiters?.confidence };
