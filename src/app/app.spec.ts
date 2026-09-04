@@ -681,6 +681,25 @@ describe('App', () => {
     expect(Array.from(results.querySelectorAll<HTMLButtonElement>(':scope > .result-actions button')).map((button) => button.textContent?.trim())).toEqual(['Scan selected crop region', 'Save on this device']);
   });
 
+  it('should not show a manual targeted check-digit action', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      analysisSuccessful: { set(value: boolean): void };
+      cropRect: { set(value: { x: number; y: number; width: number; height: number } | null): void };
+      previewUrl: { set(value: string | null): void };
+    };
+    app.analysisSuccessful.set(true);
+    app.cropRect.set({ x: 0, y: 0, width: 1, height: 1 });
+    app.previewUrl.set('blob:image');
+    fixture.detectChanges();
+
+    const buttons = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.result-actions button'));
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual([
+      'Scan selected crop region',
+      'Save on this device',
+    ]);
+  });
+
   it('should lock the visible crop while OCR is processing and unlock it afterwards', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -885,6 +904,22 @@ describe('App', () => {
     const preview = results.querySelector<HTMLImageElement>('.unwarped-preview img');
     expect(preview?.src).toContain('blob:unwarped');
     expect(preview?.alt).toBe('Unwarped selected crop used for OCR');
+    expect(results.querySelector('.unwarped-preview')!.compareDocumentPosition(results.querySelector('.raw-text')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('should display the targeted check-digit preview above raw text', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      analysisSuccessful: { set(value: boolean): void };
+      checkDigitPreviewUrl: { set(value: string | null): void };
+    };
+    app.analysisSuccessful.set(true);
+    app.checkDigitPreviewUrl.set('blob:check-digit');
+    fixture.detectChanges();
+
+    const results = (fixture.nativeElement as HTMLElement).querySelector('.results')!;
+    expect(results.querySelector<HTMLImageElement>('.unwarped-preview img')?.src).toContain('blob:check-digit');
+    expect(results.querySelector('.unwarped-preview')!.textContent).toContain('Targeted check-digit region');
     expect(results.querySelector('.unwarped-preview')!.compareDocumentPosition(results.querySelector('.raw-text')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
@@ -1211,6 +1246,67 @@ describe('App', () => {
     ];
 
     expect(app.suggestedMarkingBounds(lines, '')).toEqual({ left: 380, top: 100, right: 636, bottom: 210 });
+  });
+
+  it('should accept only a checksum-valid targeted check digit', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      fields: { (): Record<string, { value: string }>; update(updater: (fields: Record<string, { value: string }>) => Record<string, { value: string }>): void };
+      applyCheckDigitCandidate(lines: Array<{ text: string; mean: number }>, detected: Array<{ text: string; mean: number }>): void;
+    };
+
+    const stem = { text: 'HCSU 799790', mean: 0.95, box: [[100, 100], [300, 100], [300, 130], [100, 130]] };
+    app.applyCheckDigitCandidate([stem], [{ text: '9', mean: 0.98 }]);
+    expect(app.fields()['containerId'].value).toBe('HCSU7997909');
+
+    app.applyCheckDigitCandidate([stem], [{ text: '8', mean: 0.99 }]);
+    expect(app.fields()['containerId'].value).toBe('HCSU7997909');
+  });
+
+  it('should treat any completed OCR pass with a valid ID as sufficient', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      hasValidContainerId(results: Array<Array<{ text: string; mean: number }>>): boolean;
+    };
+
+    expect(app.hasValidContainerId([
+      [{ text: 'HCSU 799790 8', mean: 0.95 }],
+      [{ text: 'HCSU 799790 9', mean: 0.92 }],
+    ])).toBe(true);
+    expect(app.hasValidContainerId([
+      [{ text: 'HCSU 799790 8', mean: 0.95 }],
+      [{ text: 'HCSU 799790 8', mean: 0.92 }],
+    ])).toBe(false);
+  });
+
+  it('should locate the targeted region after character ten in a single OCR line', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      cropRect: { set(value: { x: number; y: number; width: number; height: number } | null): void };
+      checkDigitRegion(lines: Array<{ text: string; mean: number; box?: number[][] }>, imageWidth: number, imageHeight: number): { x: number; y: number; width: number; height: number } | null;
+    };
+    app.cropRect.set({ x: 0, y: 0, width: 1, height: 1 });
+
+    const region = app.checkDigitRegion([{ text: 'HCSU 799790', mean: 0.95, box: [[100, 100], [300, 100], [300, 130], [100, 130]] }], 1000, 1000);
+
+    expect(region).toEqual({ x: 0.27, y: 0.1, width: 0.086, height: 0.03 });
+  });
+
+  it('should exclude OCR lines above and below the partial container ID', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      cropRect: { set(value: { x: number; y: number; width: number; height: number } | null): void };
+      checkDigitRegion(lines: Array<{ text: string; mean: number; box?: number[][] }>, imageWidth: number, imageHeight: number): { x: number; y: number; width: number; height: number } | null;
+    };
+    app.cropRect.set({ x: 0, y: 0, width: 1, height: 1 });
+
+    const region = app.checkDigitRegion([
+      { text: '58 K2', mean: 0.9, box: [[100, 60], [180, 60], [180, 80], [100, 80]] },
+      { text: 'HCSU 799790', mean: 0.95, box: [[100, 100], [300, 100], [300, 130], [100, 130]] },
+      { text: 'RID ADR', mean: 0.9, box: [[100, 145], [220, 145], [220, 165], [100, 165]] },
+    ], 1000, 1000);
+
+    expect(region).toEqual({ x: 0.27, y: 0.1, width: 0.086, height: 0.03 });
   });
 
   it('should propose a crop from an ID stem split across OCR regions', () => {

@@ -18,6 +18,7 @@ const MAX_FULL_PHOTO_PIXELS = 4_000_000;
 const MAX_AUTO_CROP_FALLBACK_PIXELS = 1_000_000;
 const MAX_MANUAL_CROP_PIXELS = 4_000_000;
 const MAX_MANUAL_RETRY_CROP_PIXELS = 4_000_000;
+const MAX_CHECK_DIGIT_CROP_PIXELS = 1_000_000;
 const MAX_PREVIEW_RETRIES = 2;
 const OCR_PASS_TIMEOUT_MS = 45_000;
 const CROP_MEMORY_HEADROOM = 0.25;
@@ -57,6 +58,7 @@ export class App {
   protected readonly sourceName = signal('');
   protected readonly previewUrl = signal<string | null>(null);
   protected readonly unwarpedCropUrl = signal<string | null>(null);
+  protected readonly checkDigitPreviewUrl = signal<string | null>(null);
   protected readonly imageBlob = signal<Blob | null>(null);
   protected readonly cropRect = signal<CropRect | null>(null);
   protected readonly cropDraft = signal<CropRect>(DEFAULT_CROP);
@@ -72,6 +74,7 @@ export class App {
   protected readonly diagnostics = signal<Diagnostic[]>([]);
   protected readonly rawText = signal<string[]>([]);
   protected readonly rawScans = signal<RawScan[]>([]);
+  private readonly selectedOcrLines = signal<OcrLine[]>([]);
   protected readonly savedRecords = signal<SavedRecord[]>([]);
   protected readonly savedJson = signal<string | null>(null);
   protected readonly savedPhoto = signal<{ id: string; name: string; url: string } | null>(null);
@@ -332,6 +335,8 @@ export class App {
     this.analysisSuccessful.set(false);
     this.processing.set(true);
     this.clearUnwarpedCropPreview();
+    this.clearCheckDigitPreview();
+    this.selectedOcrLines.set([]);
     this.diagnostics.set([]);
     this.status.set('Preparing local OCR models...');
     const imageUrl = this.previewUrl();
@@ -348,10 +353,14 @@ export class App {
       this.rawScans.set([]);
       const scanResults = await this.scanOcrPasses(image, recovery);
       const lines = this.selectBestOcrLines(scanResults);
+      this.selectedOcrLines.set(lines);
       const rawText = lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`);
       this.rawText.set(rawText);
       const fields = this.extractFields(lines);
       this.fields.set(fields);
+      if (this.cropRect() && !this.hasValidContainerId(scanResults)) {
+        await this.runCheckDigitScan();
+      }
       let suggestedCrop: CropRect | null = null;
       if (!this.cropRect()) {
         try {
@@ -533,6 +542,8 @@ export class App {
     this.cropDraft.set(DEFAULT_CROP);
     this.unwarpSelectedRegion.set(false);
     this.unwarpRotation.set(0);
+    this.clearCheckDigitPreview();
+    this.selectedOcrLines.set([]);
     this.rawText.set([]);
     this.rawScans.set([]);
     const selection = ++this.imageSelection;
@@ -561,6 +572,8 @@ export class App {
     });
     this.rawText.set([]);
     this.rawScans.set([]);
+    this.selectedOcrLines.set([]);
+    this.clearCheckDigitPreview();
   }
 
   private async loadSavedRecords(): Promise<void> {
@@ -779,6 +792,160 @@ export class App {
     const url = this.unwarpedCropUrl();
     if (url) URL.revokeObjectURL(url);
     this.unwarpedCropUrl.set(null);
+  }
+
+  private async runCheckDigitScan(): Promise<void> {
+    const image = this.imageBlob();
+    const lines = this.selectedOcrLines();
+    if (!image || !this.cropRect()) return;
+    const imageSize = this.previewImage()?.nativeElement;
+    if (!imageSize?.naturalWidth || !imageSize.naturalHeight) {
+      this.addDiagnostic('Check digit OCR', 'The source image dimensions are not available yet.');
+      return;
+    }
+    const region = this.checkDigitRegion(lines, imageSize.naturalWidth, imageSize.naturalHeight);
+    if (!region) {
+      this.addDiagnostic('Check digit OCR', 'The first 10 container-ID characters could not define a check-digit region.');
+      return;
+    }
+
+    this.processing.set(true);
+    const startedAt = performance.now();
+    let retainPass = false;
+    let pass: { url: string; revokeUrl: boolean } | null = null;
+    try {
+      this.status.set('Scanning the expected check-digit region...');
+      pass = await this.createCheckDigitPass(image, region);
+      this.clearCheckDigitPreview();
+      this.checkDigitPreviewUrl.set(pass.url);
+      retainPass = true;
+      const detected = await this.detectWithRecovery(pass.url, { retried: false });
+      const scan = detected.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) }));
+      this.rawScans.update((scans) => [...scans, {
+        label: 'Check-digit region',
+        lines: scan,
+        durationMs: Math.round(performance.now() - startedAt),
+      }]);
+      this.applyCheckDigitCandidate(lines, detected);
+      this.status.set('Check-digit scan complete.');
+    } catch (error: unknown) {
+      this.addDiagnostic('Check digit OCR', 'The targeted check-digit scan could not be completed.', this.errorMessage(error));
+    } finally {
+      if (pass?.revokeUrl && !retainPass) URL.revokeObjectURL(pass.url);
+      this.processing.set(false);
+    }
+  }
+
+  private applyCheckDigitCandidate(lines: OcrLine[], detected: OcrLine[]): void {
+    const stem = this.findCheckDigitStem(lines);
+    if (!stem) return;
+    const current = this.fields().containerId;
+    const candidate = detected
+      .map((line) => {
+        const digits = line.text.match(/\d/g) ?? [];
+        return { digit: digits.length === 1 ? digits[0] : undefined, confidence: line.mean };
+      })
+      .filter((item): item is { digit: string; confidence: number } => Boolean(item.digit))
+      .sort((first, second) => second.confidence - first.confidence)
+      .find((item) => this.validateContainerId(stem + item.digit));
+    if (!candidate || (this.validateContainerId(current.value) && candidate.confidence < (current.confidence ?? 0))) return;
+    this.fields.update((fields) => ({
+      ...fields,
+      containerId: { ...fields.containerId, value: stem + candidate.digit, confidence: candidate.confidence },
+    }));
+  }
+
+  private hasValidContainerId(results: OcrLine[][]): boolean {
+    return results.some((lines) => this.validateContainerId(this.extractFields(lines).containerId.value));
+  }
+
+  private findCheckDigitStem(lines: OcrLine[]): string {
+    const value = this.fields().containerId.value.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    if (/^[A-Z]{3}[UJZ]\d{6}/.test(value)) return value.slice(0, 10);
+    return this.findContainerIdAnchor(lines);
+  }
+
+  private checkDigitRegion(lines: OcrLine[], imageWidth: number, imageHeight: number): CropRect | null {
+    const stem = this.findCheckDigitStem(lines);
+    if (!stem) return null;
+    const stemLines = this.linesForCheckDigitStem(lines, stem);
+    const idBounds = this.combineBounds(stemLines
+      .map((line) => this.boxBounds(line.box))
+      .filter((bounds): bounds is BoxBounds => Boolean(bounds)));
+    const crop = this.cropRect();
+    if (!idBounds || !crop) return null;
+    const cropBounds = {
+      left: crop.x * imageWidth,
+      top: crop.y * imageHeight,
+      right: (crop.x + crop.width) * imageWidth,
+      bottom: (crop.y + crop.height) * imageHeight,
+    };
+    const idWidth = Math.max(1, idBounds.right - idBounds.left);
+    const anchor = stemLines.find((line) => line.box?.length && line.text.replace(/[^A-Z0-9]/gi, '').toUpperCase().includes(stem));
+    const normalizedAnchor = anchor?.text.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    const anchorBounds = anchor ? this.boxBounds(anchor.box) : null;
+    const stemRight = anchor && normalizedAnchor
+      ? anchorBounds!.left + (anchorBounds!.right - anchorBounds!.left) * ((normalizedAnchor.indexOf(stem) + stem.length) / normalizedAnchor.length)
+      : idBounds.right;
+    const characterWidth = Math.max(1, (stemRight - idBounds.left) / 10);
+    const left = Math.max(cropBounds.left, stemRight - characterWidth * 1.5);
+    const right = Math.min(cropBounds.right, stemRight + characterWidth * 2.8);
+    const top = Math.max(cropBounds.top, idBounds.top);
+    const bottom = Math.min(cropBounds.bottom, idBounds.bottom);
+    if (right <= left || bottom <= top) return null;
+    return { x: left / imageWidth, y: top / imageHeight, width: (right - left) / imageWidth, height: (bottom - top) / imageHeight };
+  }
+
+  private linesForCheckDigitStem(lines: OcrLine[], stem: string): OcrLine[] {
+    const fragments = lines
+      .map((line, index) => ({ line, index, text: line.text.replace(/[^A-Z0-9]/gi, '').toUpperCase(), bounds: this.boxBounds(line.box) }))
+      .filter((fragment) => fragment.text && fragment.bounds)
+      .sort((first, second) => first.bounds!.top - second.bounds!.top || first.bounds!.left - second.bounds!.left);
+    for (let start = 0; start < fragments.length; start++) {
+      for (let length = 1; length <= 3 && start + length <= fragments.length; length++) {
+        const candidate = fragments.slice(start, start + length);
+        if (!candidate.map((fragment) => fragment.text).join('').includes(stem)) continue;
+        const centers = candidate.map((fragment) => (fragment.bounds!.top + fragment.bounds!.bottom) / 2);
+        const heights = candidate.map((fragment) => fragment.bounds!.bottom - fragment.bounds!.top);
+        const baselineTolerance = Math.max(6, Math.min(...heights) * 0.75);
+        if (Math.max(...centers) - Math.min(...centers) <= baselineTolerance) {
+          return candidate.map((fragment) => fragment.line);
+        }
+      }
+    }
+    return [];
+  }
+
+  private async createCheckDigitPass(image: Blob, region: CropRect): Promise<{ url: string; revokeUrl: boolean }> {
+    const decodedImage = await this.decodeImage(image);
+    try {
+      const sourceX = Math.round(region.x * decodedImage.width);
+      const sourceY = Math.round(region.y * decodedImage.height);
+      const sourceWidth = Math.max(1, Math.round(region.width * decodedImage.width));
+      const sourceHeight = Math.max(1, Math.round(region.height * decodedImage.height));
+      const scale = this.cropOutputScale(sourceWidth, sourceHeight, 3, undefined, this.runtimeCropPixelBudget(MAX_CHECK_DIGIT_CROP_PIXELS));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+      canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+      try {
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Canvas 2D context is unavailable.');
+        context.drawImage(decodedImage.source, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+        const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((result) => result ? resolve(result) : reject(new Error('Check-digit crop could not be created.')), 'image/png'));
+        return { url: URL.createObjectURL(blob), revokeUrl: true };
+      } finally {
+        canvas.width = 0;
+        canvas.height = 0;
+      }
+    } finally {
+      decodedImage.release();
+    }
+  }
+
+  private clearCheckDigitPreview(): void {
+    const url = this.checkDigitPreviewUrl();
+    if (url) URL.revokeObjectURL(url);
+    this.checkDigitPreviewUrl.set(null);
   }
 
   private selectBestOcrLines(results: OcrLine[][]): OcrLine[] {
