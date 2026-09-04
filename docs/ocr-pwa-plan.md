@@ -2,9 +2,9 @@
 
 ## Current status
 
-The Angular 22 PWA shell is implemented. It supports camera capture, device image selection, manual rectangle crops with previews and saved normalized coordinates, editable structured fields, ISO 6346 check-digit validation, local saved records, and accessible technical diagnostics. OCR normally scans the full photo unless a manual crop is selected. The user interface does not upload images.
+The Angular 22 PWA shell is implemented. It supports camera capture, device image selection, automatic crop suggestions, manual rectangle crops with previews and saved normalized coordinates, optional cylindrical unwarping with rotation control, editable structured fields, ISO 6346 check-digit validation with targeted OCR recovery, local saved records, and accessible technical diagnostics. Auto mode first scans the full photo to suggest a crop; manual mode waits for a user-selected crop. The user interface does not upload images.
 
-`npm run build` and `npm test -- --watch=false` passed on 2026-08-23.
+The current verification status is `77/77` unit tests passing and a successful production build on 2026-09-04.
 
 Browser OCR is provided by `@gutenye/ocr-browser`, an MIT-licensed browser implementation built on PaddleOCR and ONNX Runtime. The detector and recognizer sessions initialize during Angular application bootstrap. The package performs detector preprocessing, text-region extraction, recognition preprocessing, and CTC decoding on-device. OpenCV.js is shipped as a local static asset but is not yet used by the crop workflow. The UI reports initialization and inference failures with the original technical details.
 
@@ -20,7 +20,7 @@ The package implements the matching image normalization, detector box decoding, 
 
 ## JSON contract
 
-One input image produces one JSON record. It includes source metadata, manual crop coordinates, `container.id`, ISO code, maximum gross weight (`mpgm`, accepting printed `MPGM`, `MGW`, or `MAX.GR.`), TARE, payload, and capacity values in their printed kg/lb/liter/cubic units, raw text, and warnings. Fields remain empty when their markings are absent. Container IDs are checked against ISO 6346 format and check digit; questionable values remain visible for correction.
+One input image produces one JSON record. It includes source metadata, manual crop coordinates, `container.id`, ISO code, maximum gross weight (`mpgm`, accepting printed `MPGM`, `MGW`, or `MAX.GR.`), TARE, payload, and capacity values in their printed kg/lb/liter/US-gallon/cubic units, raw text, and warnings. Fields remain empty when their markings are absent. Container IDs are checked against ISO 6346 format and check digit; when normal OCR passes do not produce a valid ID, a targeted same-baseline check-digit OCR pass is attempted automatically. Slash-paired weights can infer a missing opposite unit, and inferred values are marked in the structured result.
 
 ## Local records and recovery
 
@@ -36,11 +36,9 @@ The Angular service worker pre-caches application files, local ONNX assets, and 
 
 The image picker accepts `image/*`, so it supports formats the user's browser can decode. JPEG (`image/jpeg`), PNG (`image/png`), and WebP (`image/webp`) are recommended and broadly supported for OCR. GIF (`image/gif`) is accepted when supported by the browser, but only its displayed frame is useful for OCR. HEIC/HEIF support depends on the device and browser; convert those photos to JPEG if the browser cannot load them.
 
-## Improvements backlog
+## Improvements Backlog
 
-1. Add a four-corner crop editor and text-region overlays.
-2. Complete and test PaddleOCR ONNX preprocessing and postprocessing with real container images.
-3. Add glare and denoise variants after measuring failure cases on representative container photos.
-4. Add curved-text unwarping after measuring failure cases on representative container photos.
-5. Add a sample-image evaluation set and field-level accuracy benchmark.
-6. Add model-version switching and offline cache status management.
+1. Add text-region overlays to the crop editor.
+2. Add glare and denoise variants after measuring failure cases on representative container photos.
+3. Add a sample-image evaluation set and field-level accuracy benchmark.
+4. Add model-version switching and offline cache status management.

@@ -66,6 +66,16 @@ Consequences:
 
 Both passes are processed sequentially. The temporary OCR image from one pass is released before the next pass is created. Results from both passes are combined and duplicate detected text is removed.
 
+### Optional Cylindrical Unwarp
+
+For cylindrical containers, the user can enable **Unwarp** after selecting a crop. The optional rotation adjustment ranges from `-10` to `+10` degrees. The application then performs three sequential passes:
+
+1. **Original size**: the selected crop without unwarping.
+2. **Unwarped**: the selected crop transformed with the configured rotation and cylindrical curvature.
+3. **2x unwarped**: the same transformation at an enlarged scale, subject to the 4 MP and memory limits.
+
+The first pass estimates text-line geometry and supplies a bounded rotation correction when the estimate is reliable. The unwarped pass is retained as a temporary preview for diagnosis; it is not saved instead of the original photo.
+
 ## Auto Crop Mode
 
 After a photo is selected in Auto mode:
@@ -122,6 +132,22 @@ If OCR fails or times out:
 - A normal-size Auto pass can additionally fall back from 4 MP to 1 MP.
 - Memory-related failures display a recommendation to use a tighter crop or smaller photo.
 - Decode failures report the image type, approximate file size, and decoder errors.
+
+## Check-Digit Recovery
+
+After the normal crop passes complete, the application accepts a container ID only when it has a valid ISO 6346 check digit. If no normal pass produces a valid ID, it automatically creates a targeted crop around the expected tenth character and runs a separate local OCR pass. The target is restricted to OCR fragments on the same baseline as the first ten ID characters, and only checksum-valid candidates are accepted.
+
+The targeted crop is shown as a diagnostic preview and is included in the raw OCR scan list. It does not replace the normal OCR results.
+
+## Structured Markings
+
+The extracted result includes:
+
+- Maximum gross weight (`MPGM`, `MGW`, or `MAX.GR.`) in kilograms and pounds.
+- TARE and payload weights in kilograms and pounds.
+- Capacity in printed liters, US gallons, cubic meters, and cubic feet.
+
+For slash-paired weights, an unreadable second unit may be inferred from the readable first unit. For example, `4300KG/9480s` produces `4300 KG` and inferred `9480 LB`. Explicit units remain authoritative, and inferred fields are marked as inferred in the result.
 
 ## Results and Saving
 
