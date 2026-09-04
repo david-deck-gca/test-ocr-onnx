@@ -20,7 +20,7 @@ The package implements the matching image normalization, detector box decoding, 
 
 ## JSON contract
 
-One input image produces one JSON record. It includes source metadata, manual crop coordinates, `container.id`, ISO code, maximum gross weight (`mpgm`, accepting printed `MPGM`, `MGW`, or `MAX.GR.`), TARE, payload, and capacity values in their printed kg/lb/liter/US-gallon/cubic units, raw text, and warnings. Fields remain empty when their markings are absent. Container IDs are checked against ISO 6346 format and check digit; when normal OCR passes do not produce a valid ID, a targeted same-baseline check-digit OCR pass is attempted automatically. Slash-paired weights can infer a missing opposite unit, and inferred values are marked in the structured result.
+One input image produces one JSON record. It includes source metadata, manual crop coordinates, `container.id`, ISO code, maximum working pressure in bar and PSI, maximum gross weight (`mpgm`, accepting printed `MPGM`, `MGW`, or `MAX.GR.`), TARE, payload, and capacity values in their printed kg/lb/liter/US-gallon/cubic units, raw text, and warnings. Fields remain empty when their markings are absent. Container IDs are checked against ISO 6346 format and check digit; when normal OCR passes do not produce a valid ID, a targeted same-baseline check-digit OCR pass is attempted automatically. Slash-paired weights can infer a missing opposite unit, and inferred values are marked in the structured result.
 
 ## Local records and recovery
 

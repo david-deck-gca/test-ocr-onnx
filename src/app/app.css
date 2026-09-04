@@ -448,11 +448,15 @@ video {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   margin-top: 8px;
 }
+.raw-scans > section {
+  min-width: 0;
+}
 .raw-text table {
   border-collapse: collapse;
   color: #bdcabf;
   font-size: 0.62rem;
   line-height: 1.25;
+  table-layout: fixed;
   width: 100%;
 }
 .raw-text th {
@@ -461,11 +465,8 @@ video {
 .raw-text td,
 .raw-text th {
   border-bottom: 1px solid #32443a;
+  overflow-wrap: anywhere;
   padding: 2px 4px;
-}
-.raw-text td:last-child,
-.raw-text th:last-child {
-  white-space: nowrap;
 }
 .raw-text section > p {
   font-size: 0.65rem;

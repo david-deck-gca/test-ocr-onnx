@@ -143,6 +143,7 @@ The targeted crop is shown as a diagnostic preview and is included in the raw OC
 
 The extracted result includes:
 
+- Maximum working pressure in bar and PSI.
 - Maximum gross weight (`MPGM`, `MGW`, or `MAX.GR.`) in kilograms and pounds.
 - TARE and payload weights in kilograms and pounds.
 - Capacity in printed liters, US gallons, cubic meters, and cubic feet.

@@ -150,6 +150,27 @@ describe('App', () => {
     expect(rows[1].querySelector('th')?.getAttribute('aria-hidden')).toBe('true');
   });
 
+  it('should render maximum working pressure above the container ID', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      analysisSuccessful: { set(value: boolean): void };
+      fields: { update(updater: (fields: Record<string, { value: string }>) => Record<string, { value: string }>): void };
+    };
+    app.analysisSuccessful.set(true);
+    app.fields.update((fields) => ({
+      ...fields,
+      maxWorkingPressureBar: { ...fields['maxWorkingPressureBar'], value: '10' },
+      maxWorkingPressurePsi: { ...fields['maxWorkingPressurePsi'], value: '145' },
+    }));
+    fixture.detectChanges();
+
+    const rows = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLTableRowElement>('.field-grid tbody tr'));
+    expect(rows.slice(0, 3).map((row) => row.querySelector('th')?.textContent?.trim())).toEqual(['MAX WORKING PRESSURE', '', 'Container ID']);
+    expect(rows[0].querySelector('td:last-child')?.textContent).toBe('BAR');
+    expect(rows[1].querySelector('td:last-child')?.textContent).toBe('PSI');
+    expect(rows[1].querySelector('input')?.getAttribute('aria-label')).toBe('MAX WORKING PRESSURE PSI');
+  });
+
   it('should render validation and units in the table unit column', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -1166,6 +1187,22 @@ describe('App', () => {
     expect(fields['payloadLb'].value).toBe('5.380');
     expect(fields['capacityCubicMeters'].value).toBe('4.6');
     expect(fields['capacityCubicFeet'].value).toBe('162');
+  });
+
+  it('should extract maximum working pressure in bar and psi', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string; confidence?: number }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'MAX WORKING PRESSURE 10 BAR/145 PSI', mean: 0.96 },
+    ]);
+
+    expect(fields['maxWorkingPressureBar'].value).toBe('10');
+    expect(fields['maxWorkingPressurePsi'].value).toBe('145');
+    expect(fields['maxWorkingPressureBar'].confidence).toBe(0.96);
+    expect(fields['maxWorkingPressurePsi'].confidence).toBe(0.96);
   });
 
   it('should keep gross pounds attached to the gross row when OCR confuses the L in LBS', () => {

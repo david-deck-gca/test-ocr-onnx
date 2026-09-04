@@ -2,7 +2,7 @@ import { Component, ElementRef, Injector, afterNextRender, computed, inject, sig
 import { OcrService } from './ocr.service';
 
 type CaptureMode = 'auto-crop' | 'manual-crop';
-type FieldKey = 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters' | 'capacityUsGallons' | 'capacityCubicMeters' | 'capacityCubicFeet';
+type FieldKey = 'maxWorkingPressureBar' | 'maxWorkingPressurePsi' | 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters' | 'capacityUsGallons' | 'capacityCubicMeters' | 'capacityCubicFeet';
 type OcrLine = { text: string; mean: number; box?: number[][] };
 type UnwarpGeometry = { rotation: number; curvature: number; reliable: boolean };
 type CropRect = { x: number; y: number; width: number; height: number };
@@ -79,6 +79,8 @@ export class App {
   protected readonly savedJson = signal<string | null>(null);
   protected readonly savedPhoto = signal<{ id: string; name: string; url: string } | null>(null);
   protected readonly fields = signal<Record<FieldKey, ContainerField>>({
+    maxWorkingPressureBar: { value: '', unit: 'BAR' },
+    maxWorkingPressurePsi: { value: '', unit: 'PSI' },
     containerId: { value: '' },
     isoCode: { value: '' },
     mpgmKg: { value: '', unit: 'KG' },
@@ -557,6 +559,8 @@ export class App {
   private clearFields(): void {
     this.analysisSuccessful.set(false);
     this.fields.set({
+      maxWorkingPressureBar: { value: '', unit: 'BAR' },
+      maxWorkingPressurePsi: { value: '', unit: 'PSI' },
       containerId: { value: '' },
       isoCode: { value: '' },
       mpgmKg: { value: '', unit: 'KG' },
@@ -1301,6 +1305,7 @@ export class App {
         manualCrop: this.cropRect(),
       },
       container: {
+        maxWorkingPressure: { bar: fields.maxWorkingPressureBar, psi: fields.maxWorkingPressurePsi },
         id: { ...fields.containerId, iso6346Valid: this.containerIdValid() },
         isoCode: fields.isoCode,
         mpgm: { kg: fields.mpgmKg, lb: fields.mpgmLb },
@@ -1354,6 +1359,7 @@ export class App {
 
   private extractFields(lines: OcrLine[]): Record<FieldKey, ContainerField> {
     const fields: Record<FieldKey, ContainerField> = {
+      maxWorkingPressureBar: { value: '', unit: 'BAR' }, maxWorkingPressurePsi: { value: '', unit: 'PSI' },
       containerId: { value: '' }, isoCode: { value: '' },
       mpgmKg: { value: '', unit: 'KG' }, mpgmLb: { value: '', unit: 'LB' },
       tareKg: { value: '', unit: 'KG' }, tareLb: { value: '', unit: 'LB' },
@@ -1488,6 +1494,21 @@ export class App {
       }
       return candidates.sort((first, second) => second.confidence - first.confidence)[0];
     };
+    const pressureAfter = (label: RegExp, unit: 'BAR' | 'PSI') => {
+      const unitPattern = unit === 'BAR' ? /BAR\b/ : /PSI\b/;
+      const candidates: Array<{ value: string; confidence: number }> = [];
+      for (let labelIndex = 0; labelIndex < text.length; labelIndex++) {
+        const labelMatch = text[labelIndex].normalized.match(label);
+        if (!labelMatch || labelMatch.index === undefined) continue;
+        const sameLine = text[labelIndex].normalized.slice(labelMatch.index + labelMatch[0].length);
+        const nearby = [sameLine, ...text.slice(labelIndex + 1, labelIndex + 4).map((line) => line.normalized)];
+        for (const source of nearby) {
+          const match = source.match(new RegExp(`(\\d[\\d ,.]*)\\s*${unitPattern.source}`));
+          if (match) candidates.push({ value: match[1].trim(), confidence: text[labelIndex].mean });
+        }
+      }
+      return candidates.sort((first, second) => second.confidence - first.confidence)[0];
+    };
     const grossLabel = /\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT|\bMAX\.?\s*GR(?:[O0]SS)?\.?/;
     const mpgmKg = weightAfter(grossLabel, 'KG');
     const mpgmLb = weightAfter(grossLabel, 'LB');
@@ -1500,6 +1521,10 @@ export class App {
     const capacityUsGallons = capacityAfter(/\bCAP(?:ACITY|CITY)\b|\bCAPAC\.?\b/, /US\s*GAL\b/);
     const capacityCubicMeters = capacityAfter(/\bCU\.?\s*CAP\.?/, /CU\.?\s*M\.?/);
     const capacityCubicFeet = capacityAfter(/\bCU\.?\s*CAP\.?/, /CU\.?\s*FT\.?/);
+    const maxWorkingPressureBar = pressureAfter(/MAX\s*WORKING\s*PRESSURE/, 'BAR');
+    const maxWorkingPressurePsi = pressureAfter(/MAX\s*WORKING\s*PRESSURE/, 'PSI');
+    fields.maxWorkingPressureBar = { value: maxWorkingPressureBar?.value ?? '', unit: 'BAR', confidence: maxWorkingPressureBar?.confidence };
+    fields.maxWorkingPressurePsi = { value: maxWorkingPressurePsi?.value ?? '', unit: 'PSI', confidence: maxWorkingPressurePsi?.confidence };
     fields.mpgmKg = { value: mpgmKg?.value ?? '', unit: 'KG', confidence: mpgmKg?.confidence, inferred: mpgmKg?.inferred };
     fields.mpgmLb = { value: mpgmLb?.value ?? '', unit: 'LB', confidence: mpgmLb?.confidence, inferred: mpgmLb?.inferred };
     fields.tareKg = { value: tareKg?.value ?? '', unit: 'KG', confidence: tareKg?.confidence, inferred: tareKg?.inferred };
