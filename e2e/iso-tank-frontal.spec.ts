@@ -141,4 +141,42 @@ test.describe('real OCR regressions', () => {
       }
     }
   });
+
+  test('extracts the frontal 20ft general-purpose container markings', async ({ page }) => {
+    test.setTimeout(180_000);
+
+    await page.goto('/');
+    await page.locator('input[type="file"]').setInputFiles(path.resolve('images/general-purpose_20ft_frontal.jpg'));
+
+    const status = page.locator('.status');
+    await expect(status).not.toHaveClass(/busy/, { timeout: 150_000 });
+    await expect(page.locator('.diagnostics')).toHaveCount(0);
+
+    const expectedFields = [
+      ['Container ID', 'AGZU 111135 5', null],
+      ['ISO CODE', '22G1', ''],
+      ['MAX.GR.', '30.480', 'KG'],
+      ['MAX.GR. LB', '67.200', 'LB'],
+      ['TARE', '2.100', 'KG'],
+      ['TARE LB', '4.630', 'LB'],
+      ['PAYLOAD', '28.380', 'KG'],
+      ['PAYLOAD LB', '62.570', 'LB'],
+      ['CU.CAP.', '33.2', 'CU.M.'],
+      ['CU.CAP. CU.FT.', '1.172', 'CU.FT.'],
+    ] as const;
+
+    for (const [label, value, unit] of expectedFields) {
+      const row = label.includes(' LB') || label.endsWith('CU.FT.')
+        ? page.locator('tr').filter({ has: page.locator(`input[aria-label="${label}"]`) })
+        : page.locator('tr').filter({
+          has: page.getByRole('rowheader', { name: label, exact: true }),
+        });
+
+      await expect(row).toHaveCount(1);
+      await expect(row.locator('input')).toHaveValue(value);
+      if (unit !== null) {
+        await expect(row.locator('.unit')).toContainText(unit);
+      }
+    }
+  });
 });

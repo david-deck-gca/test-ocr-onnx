@@ -1423,6 +1423,21 @@ describe('App', () => {
     expect(app.suggestedMarkingBounds(lines, '')).toEqual({ left: 400, top: 100, right: 576, bottom: 210 });
   });
 
+  it('should leave enough right margin for an automatic crop check digit', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      createSuggestedCrop(lines: Array<{ text: string; mean: number; box?: number[][] }>, containerId: string, image: Blob, sourceSize: { width: number; height: number }): Promise<{ x: number; y: number; width: number; height: number } | null>;
+    };
+    const lines = [
+      { text: 'AGZU 111135', mean: 0.95, box: [[400, 100], [580, 100], [580, 125], [400, 125]] },
+      { text: 'MAX.GR. 30,480 KG', mean: 0.95, box: [[380, 150], [620, 150], [620, 175], [380, 175]] },
+    ];
+
+    const crop = await app.createSuggestedCrop(lines, 'AGZU111135', new Blob(), { width: 1_000, height: 500 });
+
+    expect(crop).toEqual({ x: 0.352, y: 0.152, width: 0.276, height: 0.246 });
+  });
+
   it('should accept only a checksum-valid targeted check digit', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -1529,7 +1544,7 @@ describe('App', () => {
 
     expect(app.cropDraft()).toEqual(focusedCrop);
     expect(app.createSuggestedCrop).toHaveBeenCalledWith(expect.any(Array), 'HCSU7997909', expect.any(Blob), { width: 1920, height: 1080 });
-    expect(app.status()).toMatch(/^Container ID located: HCSU 799790 9\. Review the suggested crop around it and the aligned markings above and below it\. \(\d+ ms\)$/);
+    expect(app.status()).toMatch(/^Container ID located \(\d+ ms\): HCSU 799790 9\n$/);
   });
 
   it('should display a partial container ID in the initial crop status', async () => {
@@ -1592,7 +1607,7 @@ describe('App', () => {
     expect(app.fields()['tareLb'].value).toBe('8047');
     expect(app.fields()['payloadKg'].value).toBe('');
     expect(app.fields()['payloadLb'].value).toBe('');
-    expect(app.status()).toMatch(/^Container ID located: LASU 210040 0\./);
+    expect(app.status()).toMatch(/^Container ID located \(\d+ ms\): LASU 210040 0\n$/);
     expect(app.status()).not.toContain('Partial container ID');
     expect(app.analysisSuccessful()).toBe(true);
   });

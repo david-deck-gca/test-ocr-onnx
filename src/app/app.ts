@@ -687,12 +687,12 @@ export class App {
        if (suggestedCrop) {
          this.cropDraft.set(suggestedCrop);
          const retryStatus = automaticRetryReason ? ` Automatic 2x scan completed because ${automaticRetryReason} was below 85%.` : '';
-          const completeContainerId = this.validateContainerId(fields.containerId.value);
-          this.status.set(completeContainerId
-            ? `Container ID located: ${this.formatContainerId(fields.containerId.value)}. Review the suggested crop around it and the aligned markings above and below it.${retryStatus}${duration}`
-            : partialContainerId
-              ? `Partial container ID located: ${this.formatContainerId(partialContainerId)}${retryStatus}`
-              : `Container ID located. Review the suggested crop around it and the aligned markings above and below it.${retryStatus}${duration}`);
+           const completeContainerId = this.validateContainerId(fields.containerId.value);
+           this.status.set(completeContainerId
+             ? `Container ID located${duration}: ${this.formatContainerId(fields.containerId.value)}${retryStatus}\n`
+             : partialContainerId
+               ? `Partial container ID located: ${this.formatContainerId(partialContainerId)}${retryStatus}`
+               : `Container ID located${duration}.${retryStatus}\n`);
       } else if (partialContainerId) {
         this.status.set(`Partial container ID located: ${this.formatContainerId(partialContainerId)}`);
       } else {
@@ -1121,10 +1121,11 @@ export class App {
     const height = sourceSize?.height ?? decodedImage!.height;
     try {
       const padding = Math.max(24, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.08);
-      const leftPadding = Math.max(48, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.15);
+      const leftPadding = Math.max(48, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.12);
+      const rightPadding = Math.max(48, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.06);
       const left = Math.max(0, markingsBounds.left - leftPadding);
       const top = Math.max(0, markingsBounds.top - padding);
-      const right = Math.min(width, markingsBounds.right + padding);
+      const right = Math.min(width, markingsBounds.right + rightPadding);
       const bottom = Math.min(height, markingsBounds.bottom + padding);
       return {
         x: left / width,
