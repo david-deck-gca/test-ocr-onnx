@@ -509,7 +509,7 @@ describe('App', () => {
         events.push('create:second');
         return { url: 'blob:second', offsetX: 0, offsetY: 0, scale: 1.4, revokeUrl: true };
       });
-    app.detectWithRecovery = vi.fn().mockResolvedValue([]);
+    app.detectWithRecovery = vi.fn().mockResolvedValue([{ text: 'TARE 3.650 KG', mean: 0.8 }]);
 
     try {
       await app.scanOcrPasses(new Blob(['large-image'], { type: 'image/jpeg' }), { retried: false });
@@ -518,10 +518,27 @@ describe('App', () => {
       expect(revokeObjectUrl).toHaveBeenCalledWith('blob:first');
       expect(revokeObjectUrl).toHaveBeenCalledWith('blob:second');
       expect(app.createCropPass).toHaveBeenNthCalledWith(1, expect.anything(), expect.anything(), 1, undefined, 4_000_000, false, 0, 0);
-      expect(app.createCropPass).toHaveBeenNthCalledWith(2, expect.anything(), expect.anything(), 2, undefined, 4_000_000, false, 0, 0);
+    expect(app.createCropPass).toHaveBeenNthCalledWith(2, expect.anything(), { x: 0.1, y: 0.1, width: 0.8, height: 0.8 }, 2, undefined, 4_000_000, false, 0, 0);
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('should skip the selected-region enlargement when all extracted fields meet the confidence threshold', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      cropRect: { set(value: { x: number; y: number; width: number; height: number }): void };
+      createCropPass: ReturnType<typeof vi.fn>;
+      detectWithRecovery: ReturnType<typeof vi.fn>;
+      scanOcrPasses(image: Blob, recovery: { retried: boolean }): Promise<unknown>;
+    };
+    app.cropRect.set({ x: 0.1, y: 0.1, width: 0.8, height: 0.8 });
+    app.createCropPass = vi.fn().mockResolvedValue({ url: 'blob:first', offsetX: 0, offsetY: 0, scale: 1, revokeUrl: false });
+    app.detectWithRecovery = vi.fn().mockResolvedValue([{ text: 'HCSU 799790 9', mean: 0.9 }]);
+
+    await app.scanOcrPasses(new Blob(['image'], { type: 'image/jpeg' }), { retried: false });
+
+    expect(app.createCropPass).toHaveBeenCalledTimes(1);
   });
 
   it('should retry a failed image preview with fresh object URLs', () => {
@@ -1389,7 +1406,7 @@ describe('App', () => {
 
     const bounds = app.suggestedMarkingBounds(lines, 'HCSU7997909');
 
-    expect(bounds).toEqual({ left: 380, top: 30, right: 620, bottom: 240 });
+    expect(bounds).toEqual({ left: 400, top: 30, right: 580, bottom: 240 });
   });
 
   it('should propose a crop from an ID stem when the check digit is missing', () => {
@@ -1403,7 +1420,7 @@ describe('App', () => {
       { text: 'TARE 3,780 KG', mean: 0.95, box: [[380, 185], [580, 185], [580, 210], [380, 210]] },
     ];
 
-    expect(app.suggestedMarkingBounds(lines, '')).toEqual({ left: 380, top: 100, right: 636, bottom: 210 });
+    expect(app.suggestedMarkingBounds(lines, '')).toEqual({ left: 400, top: 100, right: 576, bottom: 210 });
   });
 
   it('should accept only a checksum-valid targeted check digit', () => {
@@ -1478,7 +1495,7 @@ describe('App', () => {
       { text: 'MAX.GR. 30,480 KG', mean: 0.95, box: [[380, 150], [620, 150], [620, 175], [380, 175]] },
     ];
 
-    expect(app.suggestedMarkingBounds(lines, '')).toEqual({ left: 380, top: 100, right: 636, bottom: 175 });
+    expect(app.suggestedMarkingBounds(lines, '')).toEqual({ left: 400, top: 100, right: 576, bottom: 175 });
   });
 
   it('should not populate an ID with an invalid check digit', () => {
@@ -1578,6 +1595,51 @@ describe('App', () => {
     expect(app.status()).toMatch(/^Container ID located: LASU 210040 0\./);
     expect(app.status()).not.toContain('Partial container ID');
     expect(app.analysisSuccessful()).toBe(true);
+  });
+
+  it('should preserve expected values and keep the suggested crop close to the ID for images/iso-tank_front-right-oblique.jpg', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      imageSelection: number;
+      cropDraft: () => { x: number; y: number; width: number; height: number };
+      status: () => string;
+      fields: () => Record<string, { value: string; confidence?: number }>;
+      waitForPreviewImage: ReturnType<typeof vi.fn>;
+      scanAutoCrop: ReturnType<typeof vi.fn>;
+      scanCropRegion: ReturnType<typeof vi.fn>;
+      prepareInitialCrop(image: Blob, selection: number): Promise<void>;
+    };
+    app.imageSelection = 1;
+    app.waitForPreviewImage = vi.fn().mockResolvedValue({ naturalWidth: 1600, naturalHeight: 1200 } as HTMLImageElement);
+    const obliqueLines = [
+      { text: 'MEBU 126347 6', mean: 0.96, box: [[400, 100], [700, 100], [700, 140], [400, 140]] },
+      { text: '22K2', mean: 0.95, box: [[470, 155], [590, 155], [590, 190], [470, 190]] },
+      { text: 'MGW 34.000 KG', mean: 0.8, box: [[420, 600], [700, 600], [700, 635], [420, 635]] },
+      { text: 'TARE 3.650 KG', mean: 0.84, box: [[430, 650], [650, 650], [650, 685], [430, 685]] },
+      { text: 'PAYLOAD 30.350 KG', mean: 0.78, box: [[650, 700], [1100, 700], [1100, 735], [650, 735]] },
+      { text: 'CAPACITY 25.000 L', mean: 0.81, box: [[430, 750], [700, 750], [700, 785], [430, 785]] },
+    ];
+    app.scanAutoCrop = vi.fn().mockResolvedValue(obliqueLines);
+    app.scanCropRegion = vi.fn().mockResolvedValue(obliqueLines
+      .filter((line) => !line.text.startsWith('PAYLOAD'))
+      .map((line) => ({ ...line, mean: 0.96 })));
+
+    await app.prepareInitialCrop(new Blob(['oblique'], { type: 'image/jpeg' }), 1);
+
+    expect(app.fields()['containerId'].value).toBe('MEBU1263476');
+    expect(app.fields()['isoCode'].value).toBe('22K2');
+    expect(app.fields()['mpgmKg'].value).toBe('34.000');
+    expect(app.fields()['mpgmKg'].confidence).toBe(0.96);
+    expect(app.fields()['tareKg'].value).toBe('3.650');
+    expect(app.fields()['tareKg'].confidence).toBe(0.96);
+    expect(app.fields()['payloadKg'].value).toBe('30.350');
+    expect(app.fields()['payloadKg'].confidence).toBe(0.78);
+    expect(app.fields()['capacityLiters'].value).toBe('25.000');
+    expect(app.fields()['capacityLiters'].confidence).toBe(0.96);
+    expect(app.status()).toContain('Automatic 2x scan completed because MGW 80%, TARE 84%, PAYLOAD 78%, CAPACITY 81% was below 85%.');
+    expect(app.scanCropRegion).toHaveBeenCalledWith(expect.any(Blob), expect.objectContaining({ width: expect.any(Number), height: expect.any(Number) }), 2, 4_000_000, expect.anything());
+    expect(app.cropDraft().width).toBeLessThan(0.3);
+    expect(app.cropDraft().x + app.cropDraft().width).toBeLessThan(0.5);
   });
 
   it('should reject a four-digit ID fragment and select a valid ID from another OCR row', () => {

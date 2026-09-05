@@ -636,27 +636,52 @@ export class App {
         lines: lines.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
         durationMs: Math.round(performance.now() - scanStartedAt),
       }]);
-      const fields = this.extractFields(lines);
-      const containerId = fields.containerId.value;
-      const partialContainerId = containerId ? '' : this.findContainerIdAnchor(lines);
+       let fields = this.extractFields(lines);
+       const containerId = fields.containerId.value;
+       const partialContainerId = containerId ? '' : this.findContainerIdAnchor(lines);
       if (partialContainerId) {
         fields.containerId = { value: partialContainerId, confidence: this.containerIdConfidence(lines, partialContainerId) };
       }
       this.fields.set(fields);
       this.analysisSuccessful.set(Boolean(containerId || partialContainerId));
-      const suggestedCrop = await this.createSuggestedCrop(lines, containerId || partialContainerId, image, {
-        width: preview.naturalWidth,
-        height: preview.naturalHeight,
-      });
-      if (selection !== this.imageSelection || this.cropRect()) return;
+       let suggestedCrop = await this.createSuggestedCrop(lines, containerId || partialContainerId, image, {
+         width: preview.naturalWidth,
+         height: preview.naturalHeight,
+       });
+       let automaticRetryReason = '';
+       if (suggestedCrop && this.hasLowConfidence(fields)) {
+         try {
+           const retryStartedAt = performance.now();
+           automaticRetryReason = this.lowConfidenceSummary(fields);
+           this.status.set(`Low confidence detected in ${automaticRetryReason}. Retrying the automatic crop at 2x to improve recognition...`);
+           const retryLines = await this.scanCropRegion(image, suggestedCrop, 2, MAX_MANUAL_RETRY_CROP_PIXELS, { retried: false });
+           this.rawScans.update((scans) => [...scans, {
+             label: '2x automatic crop',
+             lines: retryLines.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
+             durationMs: Math.round(performance.now() - retryStartedAt),
+           }]);
+           lines = this.selectBestOcrLines([lines, retryLines]);
+           this.rawText.set(lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`));
+           fields = this.mergeFieldsByConfidence(fields, this.extractFields(retryLines));
+           this.fields.set(fields);
+           suggestedCrop = await this.createSuggestedCrop(lines, fields.containerId.value || partialContainerId, image, {
+             width: preview.naturalWidth,
+             height: preview.naturalHeight,
+           });
+         } catch (error: unknown) {
+           this.addDiagnostic('Automatic crop retry', 'The enlarged automatic crop could not be scanned.', this.errorMessage(error));
+         }
+       }
+       if (selection !== this.imageSelection || this.cropRect()) return;
       const duration = ` (${Math.round(performance.now() - startedAt)} ms)`;
-      if (suggestedCrop) {
-        this.cropDraft.set(suggestedCrop);
-        this.status.set(containerId
-          ? `Container ID located: ${this.formatContainerId(containerId)}. Review the suggested crop around it and the aligned markings above and below it.${duration}`
-          : partialContainerId
-            ? `Partial container ID located: ${this.formatContainerId(partialContainerId)}`
-            : `Container ID located. Review the suggested crop around it and the aligned markings above and below it.${duration}`);
+       if (suggestedCrop) {
+         this.cropDraft.set(suggestedCrop);
+         const retryStatus = automaticRetryReason ? ` Automatic 2x scan completed because ${automaticRetryReason} was below 85%.` : '';
+         this.status.set(containerId
+           ? `Container ID located: ${this.formatContainerId(containerId)}. Review the suggested crop around it and the aligned markings above and below it.${retryStatus}${duration}`
+           : partialContainerId
+             ? `Partial container ID located: ${this.formatContainerId(partialContainerId)}${retryStatus}`
+             : `Container ID located. Review the suggested crop around it and the aligned markings above and below it.${retryStatus}${duration}`);
       } else if (partialContainerId) {
         this.status.set(`Partial container ID located: ${this.formatContainerId(partialContainerId)}`);
       } else {
@@ -735,6 +760,18 @@ export class App {
     return error instanceof Error ? error.message : String(error);
   }
 
+  private async scanCropRegion(image: Blob, crop: CropRect, scale: number, maximumPixels: number, recovery: { retried: boolean }): Promise<OcrLine[]> {
+    const pass = await this.createCropPass(image, crop, scale, undefined, maximumPixels);
+    try {
+      return this.deduplicateLines((await this.detectWithRecovery(pass.url, recovery)).map((line) => ({
+        ...line,
+        box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
+      })));
+    } finally {
+      if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
+    }
+  }
+
   private ocrFailureMessage(error: unknown): string {
     const message = this.errorMessage(error).toLowerCase();
     if (error instanceof RangeError || /memory|allocate|canvas|bitmap|decoded image|webgl/i.test(message)) {
@@ -749,9 +786,9 @@ export class App {
     const definitions = manualCrop
       ? [
         { label: 'Original size', crop: manualCrop, scale: 1, maximumPixels: MAX_MANUAL_CROP_PIXELS, unwarp: false, rotation: 0, curvature: 0 },
-        { label: shouldUnwarp ? 'Unwarped' : 'Enlarged', crop: manualCrop, scale: shouldUnwarp ? 1 : 2, maximumPixels: MAX_MANUAL_RETRY_CROP_PIXELS, unwarp: shouldUnwarp, rotation: this.unwarpRotation(), curvature: shouldUnwarp ? DEFAULT_AUTO_CURVATURE : 0 },
-        ...(shouldUnwarp ? [{ label: '2x unwarped', crop: manualCrop, scale: 2, maximumPixels: MAX_MANUAL_RETRY_CROP_PIXELS, unwarp: true, rotation: this.unwarpRotation(), curvature: DEFAULT_AUTO_CURVATURE }] : []),
-      ]
+         { label: shouldUnwarp ? 'Unwarped' : 'Enlarged', crop: manualCrop, scale: shouldUnwarp ? 1 : 2, maximumPixels: MAX_MANUAL_RETRY_CROP_PIXELS, unwarp: shouldUnwarp, rotation: this.unwarpRotation(), curvature: shouldUnwarp ? DEFAULT_AUTO_CURVATURE : 0 },
+         ...(shouldUnwarp ? [{ label: '2x unwarped', crop: manualCrop, scale: 2, maximumPixels: MAX_MANUAL_RETRY_CROP_PIXELS, unwarp: true, rotation: this.unwarpRotation(), curvature: DEFAULT_AUTO_CURVATURE }] : []),
+       ]
       : [{ label: 'Full photo', crop: DEFAULT_CROP, scale: 1, maximumPixels: MAX_FULL_PHOTO_PIXELS, unwarp: false, rotation: 0, curvature: 0 }];
     const scanResults: OcrLine[][] = [];
 
@@ -775,16 +812,21 @@ export class App {
         const scan = detected.map((line) => ({
           ...line,
           box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
-        }));
-        scanResults.push(scan);
-        const lines = this.deduplicateLines(scanResults.flat());
-        this.rawText.set(lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`));
-        this.rawScans.update((scans) => [...scans, {
+         }));
+         scanResults.push(scan);
+         const lines = this.deduplicateLines(scanResults.flat());
+         this.rawText.set(lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`));
+         this.rawScans.update((scans) => [...scans, {
           label: definition.label === 'Enlarged' ? `${pass.scale.toFixed(1)}x enlarged` : definition.label,
-          lines: scan.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
-          durationMs: Math.round(performance.now() - startedAt),
-        }]);
-      } finally {
+           lines: scan.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
+           durationMs: Math.round(performance.now() - startedAt),
+         }]);
+         if (manualCrop && !shouldUnwarp && index === 0) {
+           if (!this.hasLowConfidence(this.extractFields(scan))) {
+             break;
+           }
+         }
+       } finally {
         if (pass.revokeUrl && !retainPass) URL.revokeObjectURL(pass.url);
       }
     }
@@ -978,6 +1020,41 @@ export class App {
       .sort((first, second) => this.ocrResultScore(second) - this.ocrResultScore(first))[0] ?? [];
   }
 
+  private mergeFieldsByConfidence(original: Record<FieldKey, ContainerField>, retry: Record<FieldKey, ContainerField>): Record<FieldKey, ContainerField> {
+    const merged = { ...original };
+    for (const key of Object.keys(original) as FieldKey[]) {
+      const candidate = retry[key];
+      const current = original[key];
+      if (candidate?.value && (!current.value || (candidate.confidence ?? 0) > (current.confidence ?? 0))) {
+        merged[key] = { ...current, ...candidate };
+      }
+    }
+    return merged;
+  }
+
+  private lowConfidenceSummary(fields: Record<string, ContainerField>): string {
+    const labels: Record<string, string> = {
+      mpgmKg: 'MGW',
+      mpgmLb: 'MGW',
+      tareKg: 'TARE',
+      tareLb: 'TARE',
+      payloadKg: 'PAYLOAD',
+      payloadLb: 'PAYLOAD',
+      capacityLiters: 'CAPACITY',
+      capacityUsGallons: 'CAPACITY',
+      capacityCubicMeters: 'CAPACITY',
+      capacityCubicFeet: 'CAPACITY',
+    };
+    return Object.entries(fields)
+      .filter(([, field]) => field.value && field.confidence !== undefined && field.confidence < 0.85)
+      .map(([key, field]) => `${labels[key] ?? key} ${Math.round((field.confidence ?? 0) * 100)}%`)
+      .join(', ');
+  }
+
+  private hasLowConfidence(fields: Record<string, ContainerField>): boolean {
+    return Object.values(fields).some((field) => field.value && field.confidence !== undefined && field.confidence < 0.85);
+  }
+
   private ocrResultScore(lines: OcrLine[]): number {
     const fields = this.extractFields(lines);
     const detectedFields = Object.values(fields).filter((field) => field.value).length;
@@ -1062,8 +1139,11 @@ export class App {
       .filter((bounds) => bounds.bottom <= idBounds.top || bounds.top >= idBounds.bottom)
       .filter((bounds) => bounds.right >= idBounds.left && bounds.left <= idBounds.right);
     const markingsBounds = this.combineBounds([idBounds, ...relevantBounds]);
-    if (!markingsBounds || !isIncompleteIdAnchor) return markingsBounds;
-    return { ...markingsBounds, right: markingsBounds.right + (idBounds.right - idBounds.left) / 10 };
+    if (!markingsBounds) return null;
+    const right = isIncompleteIdAnchor
+      ? idBounds.right + (idBounds.right - idBounds.left) / 10
+      : idBounds.right;
+    return { left: idBounds.left, top: markingsBounds.top, right, bottom: markingsBounds.bottom };
   }
 
   private findContainerIdAnchor(lines: OcrLine[]): string {
