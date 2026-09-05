@@ -181,8 +181,9 @@ describe('App', () => {
     app.fields.update((fields) => ({
        ...fields,
        containerId: { ...fields['containerId'], value: 'HCSU7997909', confidence: 0.95 },
+       isoCode: { ...fields['isoCode'], value: '22K2', confidence: 0.84 },
        mpgmKg: { ...fields['mpgmKg'], value: '30480', confidence: 1 },
-       capacityCubicMeters: { ...fields['capacityCubicMeters'], value: '67.5' },
+       capacityCubicMeters: { ...fields['capacityCubicMeters'], value: '67.5', confidence: 0.85 },
     }));
     fixture.detectChanges();
 
@@ -190,8 +191,31 @@ describe('App', () => {
     expect(validation?.textContent).toBe('✓');
     expect(validation?.getAttribute('aria-label')).toBe('ISO 6346 check digit valid');
     expect((fixture.nativeElement as HTMLElement).querySelector('.container-id td:nth-child(4)')?.textContent).toBe('95%');
-    expect((fixture.nativeElement as HTMLElement).querySelector('tr:not(.container-id) td.confidence')?.textContent).toBe('100%');
+    expect((fixture.nativeElement as HTMLElement).querySelector('tr:nth-child(3) td.confidence')?.textContent).toBe('100%');
+    expect((fixture.nativeElement as HTMLElement).querySelector('tr:nth-child(2) td.confidence')?.classList.contains('invalid')).toBe(true);
+    expect((fixture.nativeElement as HTMLElement).querySelector('.capacity-row td.confidence')?.classList.contains('invalid')).toBe(false);
     expect((fixture.nativeElement as HTMLElement).querySelector('.capacity-row td:nth-child(3)')?.textContent).toBe('CU.M.\u00a0');
+  });
+
+  it('should color low-confidence structured fields for images/iso-tank_front-right-oblique.jpg', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      analysisSuccessful: { set(value: boolean): void };
+      fields: { update(updater: (fields: Record<string, { value: string }>) => Record<string, { value: string }>): void };
+    };
+    app.analysisSuccessful.set(true);
+    app.fields.update((fields) => ({
+      ...fields,
+      mpgmKg: { ...fields['mpgmKg'], value: '30480', confidence: 0.80 },
+      payloadKg: { ...fields['payloadKg'], value: '26830', confidence: 0.78 },
+      capacityLiters: { ...fields['capacityLiters'], value: '25000', confidence: 0.81 },
+    }));
+    fixture.detectChanges();
+
+    const rows = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLTableRowElement>('.field-grid tbody tr'));
+    expect(rows[1].querySelector('td.confidence')?.classList.contains('invalid')).toBe(true);
+    expect(rows[2].querySelector('td.confidence')?.classList.contains('invalid')).toBe(true);
+    expect(rows[3].querySelector('td.confidence')?.classList.contains('invalid')).toBe(true);
   });
 
   it('should render a warning icon for a partial container ID', () => {

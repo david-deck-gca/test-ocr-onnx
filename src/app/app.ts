@@ -1666,6 +1666,10 @@ export class App {
     return field.confidence === undefined ? '' : `${Math.round(field.confidence * 100)}%`;
   }
 
+  protected isLowConfidence(field: ContainerField): boolean {
+    return field.confidence !== undefined && field.confidence < 0.85;
+  }
+
   private validateContainerId(value: string): boolean {
     const normalized = value.replace(/\s/g, '').toUpperCase();
     if (!/^[A-Z]{3}[UJZ]\d{7}$/.test(normalized)) {
