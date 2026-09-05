@@ -67,4 +67,41 @@ test.describe('real OCR regressions', () => {
       }
     }
   });
+
+  test('extracts the frontal 4ft general-purpose container markings', async ({ page }) => {
+    test.setTimeout(180_000);
+
+    await page.goto('/');
+    await page.locator('input[type="file"]').setInputFiles(path.resolve('images/general-purpose_4ft_frontal.webp'));
+
+    const status = page.locator('.status');
+    await expect(status).not.toHaveClass(/busy/, { timeout: 150_000 });
+    await expect(page.locator('.diagnostics')).toHaveCount(0);
+
+    const expectedFields = [
+      ['Container ID', 'SDNU 920459 4', null],
+      ['MAX.GR.', '3.000', 'KG'],
+      ['MAX.GR. LB', '6.610', 'LB'],
+      ['TARE', '560', 'KG'],
+      ['TARE LB', '1.230', 'LB'],
+      ['NET', '2.440', 'KG'],
+      ['NET LB', '5.380', 'LB'],
+      ['CU.CAP.', '4.6', 'CU.M.'],
+      ['CU.CAP. CU.FT.', '162', 'CU.FT.'],
+    ] as const;
+
+    for (const [label, value, unit] of expectedFields) {
+      const row = label.includes(' LB') || label.endsWith('CU.FT.')
+        ? page.locator('tr').filter({ has: page.locator(`input[aria-label="${label}"]`) })
+        : page.locator('tr').filter({
+          has: page.getByRole('rowheader', { name: label, exact: true }),
+        });
+
+      await expect(row).toHaveCount(1);
+      await expect(row.locator('input')).toHaveValue(value);
+      if (unit !== null) {
+        await expect(row.locator('.unit')).toHaveText(unit);
+      }
+    }
+  });
 });

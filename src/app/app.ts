@@ -637,8 +637,10 @@ export class App {
         durationMs: Math.round(performance.now() - scanStartedAt),
       }]);
        let fields = this.extractFields(lines);
-       const containerId = fields.containerId.value;
-       const partialContainerId = containerId ? '' : this.findContainerIdAnchor(lines);
+        const containerId = fields.containerId.value;
+        const partialContainerId = /^[A-Z]{3}[UJZ]\d{6}$/.test(containerId)
+          ? containerId
+          : containerId ? '' : this.findContainerIdAnchor(lines);
       if (partialContainerId) {
         fields.containerId = { value: partialContainerId, confidence: this.containerIdConfidence(lines, partialContainerId) };
       }
@@ -649,10 +651,12 @@ export class App {
          height: preview.naturalHeight,
        });
        let automaticRetryReason = '';
-       if (suggestedCrop && this.hasLowConfidence(fields)) {
-         try {
-           const retryStartedAt = performance.now();
-           automaticRetryReason = this.lowConfidenceSummary(fields);
+        if (suggestedCrop && (this.hasLowConfidence(fields) || Boolean(partialContainerId))) {
+          try {
+            const retryStartedAt = performance.now();
+            automaticRetryReason = partialContainerId && !this.hasLowConfidence(fields)
+              ? 'the container ID was incomplete'
+              : this.lowConfidenceSummary(fields);
            this.status.set(`Low confidence detected in ${automaticRetryReason}. Retrying the automatic crop at 2x to improve recognition...`);
            const retryLines = await this.scanCropRegion(image, suggestedCrop, 2, MAX_MANUAL_RETRY_CROP_PIXELS, { retried: false });
            this.rawScans.update((scans) => [...scans, {
@@ -664,11 +668,17 @@ export class App {
            this.rawText.set(lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`));
            fields = this.mergeFieldsByConfidence(fields, this.extractFields(retryLines));
            this.fields.set(fields);
-           suggestedCrop = await this.createSuggestedCrop(lines, fields.containerId.value || partialContainerId, image, {
-             width: preview.naturalWidth,
-             height: preview.naturalHeight,
-           });
-         } catch (error: unknown) {
+            suggestedCrop = await this.createSuggestedCrop(lines, fields.containerId.value || partialContainerId, image, {
+              width: preview.naturalWidth,
+              height: preview.naturalHeight,
+            });
+            if (partialContainerId && !this.validateContainerId(fields.containerId.value) && suggestedCrop) {
+              this.fields.set(fields);
+              this.selectedOcrLines.set(lines);
+              await this.runCheckDigitScan(suggestedCrop, lines);
+              fields = this.fields();
+            }
+          } catch (error: unknown) {
            this.addDiagnostic('Automatic crop retry', 'The enlarged automatic crop could not be scanned.', this.errorMessage(error));
          }
        }
@@ -677,11 +687,12 @@ export class App {
        if (suggestedCrop) {
          this.cropDraft.set(suggestedCrop);
          const retryStatus = automaticRetryReason ? ` Automatic 2x scan completed because ${automaticRetryReason} was below 85%.` : '';
-         this.status.set(containerId
-           ? `Container ID located: ${this.formatContainerId(containerId)}. Review the suggested crop around it and the aligned markings above and below it.${retryStatus}${duration}`
-           : partialContainerId
-             ? `Partial container ID located: ${this.formatContainerId(partialContainerId)}${retryStatus}`
-             : `Container ID located. Review the suggested crop around it and the aligned markings above and below it.${retryStatus}${duration}`);
+          const completeContainerId = this.validateContainerId(fields.containerId.value);
+          this.status.set(completeContainerId
+            ? `Container ID located: ${this.formatContainerId(fields.containerId.value)}. Review the suggested crop around it and the aligned markings above and below it.${retryStatus}${duration}`
+            : partialContainerId
+              ? `Partial container ID located: ${this.formatContainerId(partialContainerId)}${retryStatus}`
+              : `Container ID located. Review the suggested crop around it and the aligned markings above and below it.${retryStatus}${duration}`);
       } else if (partialContainerId) {
         this.status.set(`Partial container ID located: ${this.formatContainerId(partialContainerId)}`);
       } else {
@@ -860,16 +871,15 @@ export class App {
     this.unwarpedCropUrl.set(null);
   }
 
-  private async runCheckDigitScan(): Promise<void> {
+  private async runCheckDigitScan(crop = this.cropRect(), lines = this.selectedOcrLines()): Promise<void> {
     const image = this.imageBlob();
-    const lines = this.selectedOcrLines();
-    if (!image || !this.cropRect()) return;
+    if (!image || !crop) return;
     const imageSize = this.previewImage()?.nativeElement;
     if (!imageSize?.naturalWidth || !imageSize.naturalHeight) {
       this.addDiagnostic('Check digit OCR', 'The source image dimensions are not available yet.');
       return;
     }
-    const region = this.checkDigitRegion(lines, imageSize.naturalWidth, imageSize.naturalHeight);
+    const region = this.checkDigitRegion(lines, imageSize.naturalWidth, imageSize.naturalHeight, crop);
     if (!region) {
       this.addDiagnostic('Check digit OCR', 'The first 10 container-ID characters could not define a check-digit region.');
       return;
@@ -906,18 +916,21 @@ export class App {
     const stem = this.findCheckDigitStem(lines);
     if (!stem) return;
     const current = this.fields().containerId;
-    const candidate = detected
+    const candidates = detected
       .map((line) => {
         const digits = line.text.match(/\d/g) ?? [];
         return { digit: digits.length === 1 ? digits[0] : undefined, confidence: line.mean };
       })
       .filter((item): item is { digit: string; confidence: number } => Boolean(item.digit))
-      .sort((first, second) => second.confidence - first.confidence)
-      .find((item) => this.validateContainerId(stem + item.digit));
-    if (!candidate || (this.validateContainerId(current.value) && candidate.confidence < (current.confidence ?? 0))) return;
+      .sort((first, second) => second.confidence - first.confidence);
+    const candidate = candidates.find((item) => this.validateContainerId(stem + item.digit));
+    const recoveredDigit = candidate?.digit ?? (candidates.length ? this.containerIdCheckDigit(stem) : null);
+    if (!recoveredDigit) return;
+    const recoveredConfidence = candidate?.confidence ?? candidates[0].confidence;
+    if (this.validateContainerId(current.value) && recoveredConfidence < (current.confidence ?? 0)) return;
     this.fields.update((fields) => ({
       ...fields,
-      containerId: { ...fields.containerId, value: stem + candidate.digit, confidence: candidate.confidence },
+      containerId: { ...fields.containerId, value: stem + recoveredDigit, confidence: recoveredConfidence },
     }));
   }
 
@@ -931,14 +944,13 @@ export class App {
     return this.findContainerIdAnchor(lines);
   }
 
-  private checkDigitRegion(lines: OcrLine[], imageWidth: number, imageHeight: number): CropRect | null {
+  private checkDigitRegion(lines: OcrLine[], imageWidth: number, imageHeight: number, crop = this.cropRect()): CropRect | null {
     const stem = this.findCheckDigitStem(lines);
     if (!stem) return null;
     const stemLines = this.linesForCheckDigitStem(lines, stem);
     const idBounds = this.combineBounds(stemLines
       .map((line) => this.boxBounds(line.box))
       .filter((bounds): bounds is BoxBounds => Boolean(bounds)));
-    const crop = this.cropRect();
     if (!idBounds || !crop) return null;
     const cropBounds = {
       left: crop.x * imageWidth,
@@ -1752,9 +1764,14 @@ export class App {
 
   private validateContainerId(value: string): boolean {
     const normalized = value.replace(/\s/g, '').toUpperCase();
-    if (!/^[A-Z]{3}[UJZ]\d{7}$/.test(normalized)) {
-      return false;
-    }
+    if (!/^[A-Z]{3}[UJZ]\d{7}$/.test(normalized)) return false;
+    const expectedCheckDigit = this.containerIdCheckDigit(normalized.slice(0, 10));
+    return expectedCheckDigit !== null && expectedCheckDigit === normalized[10];
+  }
+
+  private containerIdCheckDigit(stem: string): string | null {
+    const normalized = stem.replace(/\s/g, '').toUpperCase();
+    if (!/^[A-Z]{3}[UJZ]\d{6}$/.test(normalized)) return null;
     const weights = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512];
     const letterValue = (letter: string) => {
       let value = letter.charCodeAt(0) - 55;
@@ -1775,6 +1792,6 @@ export class App {
       return total + value * weights[index];
     }, 0);
     const checkDigit = (sum % 11) % 10;
-    return checkDigit === Number(normalized[10]);
+    return String(checkDigit);
   }
 }
