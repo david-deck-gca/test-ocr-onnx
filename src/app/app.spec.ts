@@ -252,12 +252,12 @@ describe('App', () => {
     expect(app.cropDraft()).toEqual({ x: 0, y: 0, width: 1, height: 1 });
   });
 
-  it('should default to manual crop mode and hide image controls before photo selection', () => {
+  it('should default to automatic crop mode and hide image controls before photo selection', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       captureMode: () => string;
     };
-    expect(app.captureMode()).toBe('manual-crop');
+    expect(app.captureMode()).toBe('auto-crop');
     expect((fixture.nativeElement as HTMLElement).querySelectorAll('.select-control')).toHaveLength(0);
   });
 
@@ -274,14 +274,14 @@ describe('App', () => {
 
       const controls = Array.from((fixture.nativeElement as HTMLElement).querySelector('.capture-controls')!.children);
       expect(controls.map((control) => control.className)).toEqual(['photo-actions', 'select-control', 'select-control']);
-      expect((controls[1].querySelector('select') as HTMLSelectElement).value).toBe('manual-crop');
+      expect((controls[1].querySelector('select') as HTMLSelectElement).value).toBe('auto-crop');
       expect((controls[2].querySelector('select') as HTMLSelectElement).value).toBe('no');
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it('should launch automatic crop when the Crop select changes to Auto', async () => {
+  it('should launch automatic crop when an image is selected in the default mode', async () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       useImage(image: Blob, name: string): void;
@@ -292,10 +292,6 @@ describe('App', () => {
 
     try {
       app.useImage(new Blob(['image'], { type: 'image/jpeg' }), 'container.jpg');
-      fixture.detectChanges();
-      const cropSelect = (fixture.nativeElement as HTMLElement).querySelector<HTMLSelectElement>('.select-control select')!;
-      cropSelect.value = 'auto-crop';
-      cropSelect.dispatchEvent(new Event('change'));
       await fixture.whenStable();
 
       expect(app.prepareInitialCrop).toHaveBeenCalledTimes(1);
@@ -427,11 +423,13 @@ describe('App', () => {
       setUnwarpSelectedRegion(enabled: boolean): void;
       unwarpRotation: () => number;
       setUnwarpRotation(degrees: number): void;
+      captureMode: { set(value: string): void };
       useImage(image: Blob, name: string): void;
     };
     vi.stubGlobal('URL', { createObjectURL: vi.fn().mockReturnValue('blob:photo'), revokeObjectURL: vi.fn() });
 
     try {
+      app.captureMode.set('manual-crop');
       app.useImage(new Blob(['image'], { type: 'image/jpeg' }), 'container.jpg');
       app.setUnwarpSelectedRegion(true);
       app.setUnwarpRotation(3.5);
@@ -543,7 +541,7 @@ describe('App', () => {
     };
     appWithImage.captureMode.set('auto-crop');
     appWithImage.useImage(new Blob(['image'], { type: 'image/jpeg' }), 'container.jpg');
-    expect(appWithImage.captureMode()).toBe('manual-crop');
+    expect(appWithImage.captureMode()).toBe('auto-crop');
   });
 
   it('should enable saving once an image is selected', () => {
@@ -1294,15 +1292,20 @@ describe('App', () => {
       suggestedMarkingBounds(lines: Array<{ text: string; mean: number; box?: number[][] }>, containerId: string): { left: number; top: number; right: number; bottom: number } | null;
     };
     const lines = [
+      { text: 'UNRELATED ABOVE', mean: 0.95, box: [[100, 50], [300, 50], [300, 75], [100, 75]] },
+      { text: 'ALIGNED ABOVE 1', mean: 0.95, box: [[410, 30], [570, 30], [570, 55], [410, 55]] },
+      { text: 'ALIGNED ABOVE 2', mean: 0.95, box: [[390, 65], [590, 65], [590, 90], [390, 90]] },
       { text: 'HCSU 799790', mean: 0.92, box: [[400, 100], [560, 100], [560, 125], [400, 125]] },
       { text: '9', mean: 0.88, box: [[570, 100], [580, 100], [580, 125], [570, 125]] },
       { text: 'MAX.GR. 30,480 KG', mean: 0.95, box: [[380, 150], [620, 150], [620, 175], [380, 175]] },
       { text: 'TARE 3,780 KG', mean: 0.95, box: [[380, 185], [580, 185], [580, 210], [380, 210]] },
+      { text: 'ALIGNED BELOW', mean: 0.95, box: [[420, 215], [560, 215], [560, 240], [420, 240]] },
+      { text: 'UNRELATED BELOW', mean: 0.95, box: [[700, 250], [900, 250], [900, 275], [700, 275]] },
     ];
 
     const bounds = app.suggestedMarkingBounds(lines, 'HCSU7997909');
 
-    expect(bounds).toEqual({ left: 380, top: 100, right: 620, bottom: 210 });
+    expect(bounds).toEqual({ left: 380, top: 30, right: 620, bottom: 240 });
   });
 
   it('should propose a crop from an ID stem when the check digit is missing', () => {
@@ -1425,7 +1428,115 @@ describe('App', () => {
 
     expect(app.cropDraft()).toEqual(focusedCrop);
     expect(app.createSuggestedCrop).toHaveBeenCalledWith(expect.any(Array), 'HCSU7997909', expect.any(Blob), { width: 1920, height: 1080 });
-    expect(app.status()).toMatch(/markings below\. \(\d+ ms\)$/);
+    expect(app.status()).toMatch(/^Container ID located: HCSU 799790 9\. Review the suggested crop around it and the aligned markings above and below it\. \(\d+ ms\)$/);
+  });
+
+  it('should display a partial container ID in the initial crop status', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      imageSelection: number;
+      status: () => string;
+      waitForPreviewImage: ReturnType<typeof vi.fn>;
+      scanAutoCrop: ReturnType<typeof vi.fn>;
+      createSuggestedCrop: ReturnType<typeof vi.fn>;
+      prepareInitialCrop(image: Blob, selection: number): Promise<void>;
+    };
+    app.imageSelection = 1;
+    app.waitForPreviewImage = vi.fn().mockResolvedValue({ naturalWidth: 1920, naturalHeight: 1080 } as HTMLImageElement);
+    app.scanAutoCrop = vi.fn().mockResolvedValue([
+      { text: 'HCSU 799790', mean: 0.95, box: [[300, 100], [500, 100], [500, 130], [300, 130]] },
+    ]);
+    app.createSuggestedCrop = vi.fn().mockResolvedValue(null);
+
+    await app.prepareInitialCrop(new Blob(), 1);
+
+    expect(app.status()).toBe('Partial container ID located: HCSU 799790');
+  });
+
+  it('should reject a four-digit ID fragment and select a valid ID from another OCR row', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number; box?: number[][] }>): Record<string, { value: string }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'YODU 2638', mean: 0.99, box: [[100, 100], [300, 100], [300, 130], [100, 130]] },
+      { text: '22K5', mean: 0.98, box: [[100, 145], [180, 145], [180, 170], [100, 170]] },
+      { text: 'EUXU 700756 9', mean: 0.95, box: [[500, 200], [760, 200], [760, 235], [500, 235]] },
+    ]);
+
+    expect(fields['containerId'].value).toBe('EUXU7007569');
+  });
+
+  it('should find a six-digit partial ID only on the same OCR row', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      findContainerIdAnchor(lines: Array<{ text: string; mean: number; box?: number[][] }>): string;
+    };
+
+    expect(app.findContainerIdAnchor([
+      { text: 'YODU 2638', mean: 0.99, box: [[100, 100], [300, 100], [300, 130], [100, 130]] },
+      { text: '22K5', mean: 0.98, box: [[100, 145], [180, 145], [180, 170], [100, 170]] },
+    ])).toBe('');
+    expect(app.findContainerIdAnchor([
+      { text: 'EUXU 700756', mean: 0.95, box: [[500, 200], [760, 200], [760, 235], [500, 235]] },
+    ])).toBe('EUXU700756');
+    expect(app.findContainerIdAnchor([
+      { text: 'YODU 263822', mean: 0.99, box: [[100, 100], [300, 100], [300, 130], [100, 130]] },
+      { text: 'EUXU 700756 9', mean: 0.95, box: [[500, 200], [760, 200], [760, 235], [500, 235]] },
+    ])).toBe('EUXU700756');
+    expect(app.findContainerIdAnchor([
+      { text: '58T6 RID- EUXU700756', mean: 0.95, box: [[100, 200], [500, 200], [500, 240], [100, 240]] },
+    ])).toBe('EUXU700756');
+  });
+
+  it('should narrow a merged OCR box to an embedded partial ID', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      suggestedMarkingBounds(lines: Array<{ text: string; mean: number; box?: number[][] }>, containerId: string): { left: number; top: number; right: number; bottom: number } | null;
+    };
+
+    const bounds = app.suggestedMarkingBounds([
+      { text: '58T6 RID- EUXU700756', mean: 0.95, box: [[100, 200], [500, 200], [500, 240], [100, 240]] },
+    ], '');
+
+    expect(bounds?.left).toBeGreaterThan(100);
+    expect(bounds?.right).toBeLessThan(550);
+  });
+
+  it('should reject a tall OCR box that merges two visual rows', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      findContainerIdAnchor(lines: Array<{ text: string; mean: number; box?: number[][] }>): string;
+    };
+    const lines = [
+      { text: 'YODU 263822', mean: 0.99, box: [[100, 100], [360, 100], [360, 190], [100, 190]] },
+      { text: '22K5', mean: 0.98, box: [[100, 205], [180, 205], [180, 230], [100, 230]] },
+      { text: 'EUXU 700756 9', mean: 0.95, box: [[500, 300], [760, 300], [760, 335], [500, 335]] },
+    ];
+
+    expect(app.findContainerIdAnchor(lines)).toBe('EUXU700756');
+    expect(app.findContainerIdAnchor(lines.slice(0, 2))).toBe('');
+  });
+
+  it('should retain the initial full-photo OCR result in raw detected text', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      imageSelection: number;
+      rawScans: () => Array<{ label: string; lines: Array<{ text: string; confidence: number }>; durationMs: number }>;
+      waitForPreviewImage: ReturnType<typeof vi.fn>;
+      scanAutoCrop: ReturnType<typeof vi.fn>;
+      createSuggestedCrop: ReturnType<typeof vi.fn>;
+      prepareInitialCrop(image: Blob, selection: number): Promise<void>;
+    };
+    app.imageSelection = 1;
+    app.waitForPreviewImage = vi.fn().mockResolvedValue({ naturalWidth: 1920, naturalHeight: 1080 } as HTMLImageElement);
+    app.scanAutoCrop = vi.fn().mockResolvedValue([{ text: 'EUXU 700756 9', mean: 0.95 }]);
+    app.createSuggestedCrop = vi.fn().mockResolvedValue(null);
+
+    await app.prepareInitialCrop(new Blob(), 1);
+
+    expect(app.rawScans()[0].lines[0]).toEqual({ text: 'EUXU 700756 9', confidence: 95 });
   });
 
 });

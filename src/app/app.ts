@@ -30,7 +30,7 @@ const THUMBNAIL_MAX_DIMENSION = 160;
 const THUMBNAIL_JPEG_QUALITY = 0.8;
 
 function defaultCaptureMode(): CaptureMode {
-  return 'manual-crop';
+  return 'auto-crop';
 }
 
 interface ContainerField {
@@ -373,7 +373,7 @@ export class App {
       }
       if (suggestedCrop) {
         this.cropDraft.set(suggestedCrop);
-        this.status.set('OCR complete. Review the suggested region around the container ID and markings beneath it.');
+        this.status.set('OCR complete. Review the suggested region around the container ID and the aligned markings above and below it.');
       } else {
         this.status.set(`OCR complete. Found ${lines.length} text region${lines.length === 1 ? '' : 's'}. Review the fields before saving.`);
       }
@@ -539,7 +539,6 @@ export class App {
     this.previewRetries = 0;
     this.sourceName.set(name);
     this.applyingCrop.set(false);
-    this.captureMode.set('manual-crop');
     this.cropRect.set(null);
     this.cropDraft.set(DEFAULT_CROP);
     this.unwarpSelectedRegion.set(false);
@@ -619,6 +618,7 @@ export class App {
       if (selection !== this.imageSelection) return;
 
       let lines: OcrLine[];
+      const scanStartedAt = performance.now();
       try {
         lines = await this.scanAutoCrop(preview, MAX_FULL_PHOTO_PIXELS);
       } catch (error: unknown) {
@@ -629,7 +629,14 @@ export class App {
           throw new Error(`Normal-size auto crop failed: ${this.errorMessage(error)}. Reduced auto crop failed: ${this.errorMessage(fallbackError)}`);
         }
       }
+      this.rawText.set(lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`));
+      this.rawScans.set([{
+        label: 'Full photo',
+        lines: lines.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
+        durationMs: Math.round(performance.now() - scanStartedAt),
+      }]);
       const containerId = this.extractFields(lines).containerId.value;
+      const partialContainerId = containerId ? '' : this.findContainerIdAnchor(lines);
       const suggestedCrop = await this.createSuggestedCrop(lines, containerId, image, {
         width: preview.naturalWidth,
         height: preview.naturalHeight,
@@ -638,7 +645,13 @@ export class App {
       const duration = ` (${Math.round(performance.now() - startedAt)} ms)`;
       if (suggestedCrop) {
         this.cropDraft.set(suggestedCrop);
-        this.status.set(`Container ID located. Review the suggested crop around it and the markings below.${duration}`);
+        this.status.set(containerId
+          ? `Container ID located: ${this.formatContainerId(containerId)}. Review the suggested crop around it and the aligned markings above and below it.${duration}`
+          : partialContainerId
+            ? `Partial container ID located: ${this.formatContainerId(partialContainerId)}`
+            : `Container ID located. Review the suggested crop around it and the aligned markings above and below it.${duration}`);
+      } else if (partialContainerId) {
+        this.status.set(`Partial container ID located: ${this.formatContainerId(partialContainerId)}`);
       } else {
         this.status.set(`Container ID was not located. Draw a crop around the ID and markings you want to scan.${duration}`);
       }
@@ -1035,18 +1048,15 @@ export class App {
     const idBounds = this.combineBounds(idLines.map((line) => this.boxBounds(line.box)).filter((bounds): bounds is BoxBounds => Boolean(bounds)));
     if (!idBounds) return null;
 
-    const idWidth = idBounds.right - idBounds.left;
     const idHeight = idBounds.bottom - idBounds.top;
-    const horizontalAllowance = Math.max(idWidth * 1.5, idHeight * 8);
     const relevantBounds = lines
       .map((line) => this.boxBounds(line.box))
       .filter((bounds): bounds is BoxBounds => Boolean(bounds))
-      .filter((bounds) => bounds.bottom >= idBounds.top - idHeight
-        && bounds.right >= idBounds.left - horizontalAllowance
-        && bounds.left <= idBounds.right + horizontalAllowance);
+      .filter((bounds) => bounds.bottom <= idBounds.top || bounds.top >= idBounds.bottom)
+      .filter((bounds) => bounds.right >= idBounds.left && bounds.left <= idBounds.right);
     const markingsBounds = this.combineBounds([idBounds, ...relevantBounds]);
     if (!markingsBounds || !isIncompleteIdAnchor) return markingsBounds;
-    return { ...markingsBounds, right: markingsBounds.right + idWidth / 10 };
+    return { ...markingsBounds, right: markingsBounds.right + (idBounds.right - idBounds.left) / 10 };
   }
 
   private findContainerIdAnchor(lines: OcrLine[]): string {
@@ -1057,16 +1067,28 @@ export class App {
         text: line.text.replace(/[^A-Z0-9]/gi, '').toUpperCase(),
         bounds: this.boxBounds(line.box),
       }))
-      .filter((fragment) => fragment.text && fragment.bounds)
+      .filter((fragment) => fragment.text && fragment.bounds && this.isLikelySingleOcrRow(fragment.line, lines))
       .sort((first, second) => first.bounds!.top - second.bounds!.top || first.bounds!.left - second.bounds!.left);
+    let partialAnchor = '';
     for (let start = 0; start < fragments.length; start++) {
       for (let length = 1; length <= 3 && start + length <= fragments.length; length++) {
-        const candidate = fragments.slice(start, start + length).map((fragment) => fragment.text).join('');
-        const anchor = candidate.match(/[A-Z]{3}[UJZ]\d{6}/)?.[0];
-        if (anchor) return anchor;
+        const candidateFragments = fragments.slice(start, start + length);
+        if (!candidateFragments.every((fragment) => this.sameOcrRow(candidateFragments[0], fragment))) continue;
+        const candidate = candidateFragments.map((fragment) => fragment.text).join('');
+        const compactCandidate = candidate.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+        const candidatePattern = candidateFragments.length === 1
+          ? /[A-Z]{3}[UJZ]\d{7}/g
+          : /^[A-Z]{3}[UJZ]\d{7}$/;
+        const fullMatch = compactCandidate.match(candidatePattern)?.find((value) => this.validateContainerId(value));
+        if (fullMatch) return fullMatch.slice(0, 10);
+        const partialPattern = candidateFragments.length === 1
+          ? /[A-Z]{3}[UJZ]\d{6}/
+          : /^[A-Z]{3}[UJZ]\d{6}$/;
+        const partialMatch = compactCandidate.match(partialPattern)?.[0];
+        if (partialMatch && !partialAnchor) partialAnchor = partialMatch;
       }
     }
-    return '';
+    return partialAnchor;
   }
 
   private linesForContainerId(lines: OcrLine[], containerId: string): OcrLine[] {
@@ -1083,8 +1105,9 @@ export class App {
     for (let start = 0; start < fragments.length; start++) {
       for (let length = 1; length <= 3 && start + length <= fragments.length; length++) {
         const candidate = fragments.slice(start, start + length);
+        if (!candidate.every((fragment) => this.sameOcrRow(candidate[0], fragment))) continue;
         if (candidate.map((fragment) => fragment.text).join('').includes(normalizedId)) {
-          return candidate.map((fragment) => fragment.line);
+          return candidate.map((fragment) => this.narrowLineToContainerId(fragment.line, normalizedId));
         }
       }
     }
@@ -1170,6 +1193,42 @@ export class App {
       canvas.width = 0;
       canvas.height = 0;
     }
+  }
+
+  private narrowLineToContainerId(line: OcrLine, containerId: string): OcrLine {
+    const source = line.text.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    const target = containerId.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    const start = source.indexOf(target);
+    const bounds = this.boxBounds(line.box);
+    if (start < 0 || !bounds || !source.length) return line;
+    const left = bounds.left + (bounds.right - bounds.left) * start / source.length;
+    const right = bounds.left + (bounds.right - bounds.left) * (start + target.length) / source.length;
+    return {
+      ...line,
+      box: [[left, bounds.top], [right, bounds.top], [right, bounds.bottom], [left, bounds.bottom]],
+    };
+  }
+
+  private isLikelySingleOcrRow(line: OcrLine, lines: OcrLine[]): boolean {
+    const bounds = this.boxBounds(line.box);
+    if (!bounds) return false;
+    const heights = lines
+      .map((candidate) => this.boxBounds(candidate.box))
+      .filter((candidate): candidate is BoxBounds => Boolean(candidate))
+      .map((candidate) => candidate.bottom - candidate.top)
+      .sort((first, second) => first - second);
+    if (!heights.length) return true;
+    const medianHeight = heights[Math.floor((heights.length - 1) / 2)];
+    return bounds.bottom - bounds.top <= medianHeight * 1.75;
+  }
+
+  private sameOcrRow(first: { bounds: BoxBounds | null }, second: { bounds: BoxBounds | null }): boolean {
+    if (!first.bounds || !second.bounds) return false;
+    const firstHeight = first.bounds.bottom - first.bounds.top;
+    const secondHeight = second.bounds.bottom - second.bounds.top;
+    const firstCenter = (first.bounds.top + first.bounds.bottom) / 2;
+    const secondCenter = (second.bounds.top + second.bounds.bottom) / 2;
+    return Math.abs(firstCenter - secondCenter) <= Math.min(firstHeight, secondHeight) * 0.5;
   }
 
   private drawCylindricalUnwarp(context: CanvasRenderingContext2D, source: CanvasImageSource, sourceX: number, sourceY: number, sourceWidth: number, sourceHeight: number, baseWidth: number, baseHeight: number, outputWidth: number, outputHeight: number, rotation: number, curvature: number): void {
@@ -1371,33 +1430,41 @@ export class App {
     };
     const text = lines.map((line) => ({ ...line, normalized: line.text.toUpperCase().replace(/[|]/g, 'I') }));
     const find = (pattern: RegExp) => text.find((line) => pattern.test(line.normalized));
-    const idLine = find(/[A-Z]{3}[UJZ][\s-]*\d{6}[\s-]*\d/);
-    if (idLine) {
-      const value = idLine.normalized.match(/[A-Z]{3}[UJZ][\s-]*\d{6}[\s-]*\d/)![0].replace(/[\s-]/g, '');
-      if (this.validateContainerId(value)) {
-        fields.containerId = { value, confidence: idLine.mean };
-      }
+    const idCandidates = text.flatMap((line) => {
+      const match = line.normalized.match(/\b([A-Z]{3}[UJZ])\s*((?:\d\s*){5}\d)(?:\s+(\d))?\b/);
+      if (!match) return [];
+      const stem = `${match[1]}${match[2].replace(/\s/g, '')}`;
+      const checkDigit = match[3] ?? '';
+      return [{ line, stem, value: checkDigit ? `${stem}${checkDigit}` : '' }];
+    });
+    const validId = idCandidates.find((candidate) => candidate.value && this.validateContainerId(candidate.value));
+    if (validId) {
+      fields.containerId = { value: validId.value, confidence: validId.line.mean };
     } else {
       const idFragments = text
         .map((line, index) => ({
           ...line,
           index,
           fragment: line.normalized.replace(/[^A-Z0-9]/g, ''),
-          center: line.box?.reduce(([totalX, totalY], [x, y]) => [totalX + x, totalY + y], [0, 0]).map((total) => total / line.box!.length),
+          bounds: this.boxBounds(line.box),
         }))
-        .filter((line) => line.fragment)
-        .sort((first, second) => {
-          if (!first.center || !second.center) return first.index - second.index;
-          return first.center[1] - second.center[1] || first.center[0] - second.center[0];
-        });
+        .filter((line) => line.fragment && line.bounds)
+        .sort((first, second) => first.bounds!.top - second.bounds!.top || first.bounds!.left - second.bounds!.left);
+      const sameRow = (first: typeof idFragments[number], second: typeof idFragments[number]) => {
+        const firstBounds = first.bounds!;
+        const secondBounds = second.bounds!;
+        return firstBounds.bottom > secondBounds.top && secondBounds.bottom > firstBounds.top;
+      };
       for (let start = 0; start < idFragments.length && !fields.containerId.value; start++) {
         for (let length = 2; length <= 3 && start + length <= idFragments.length; length++) {
-          const candidate = idFragments.slice(start, start + length).map((line) => line.fragment).join('');
-          const recovered = candidate.match(/[A-Z]{3}[UJZ]\d{7}/)?.[0];
+          const candidate = idFragments.slice(start, start + length);
+          if (!candidate.every((line) => sameRow(candidate[0], line))) continue;
+          const compactCandidate = candidate.map((line) => line.fragment).join('').toUpperCase();
+          const recovered = compactCandidate.match(/^[A-Z]{3}[UJZ]\d{7}$/)?.[0];
           if (recovered && this.validateContainerId(recovered)) {
             fields.containerId = {
               value: recovered,
-              confidence: Math.min(...idFragments.slice(start, start + length).map((line) => line.mean)),
+              confidence: Math.min(...candidate.map((line) => line.mean)),
             };
             break;
           }
