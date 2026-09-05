@@ -95,6 +95,7 @@ export class App {
     capacityCubicFeet: { value: '', unit: 'CU.FT.' },
   });
   protected readonly containerIdValid = computed(() => this.validateContainerId(this.fields().containerId.value));
+  protected readonly containerIdPartial = computed(() => /^[A-Z]{3}[UJZ]\d{6}$/.test(this.fields().containerId.value));
   protected readonly formattedContainerId = computed(() => this.formatContainerId(this.fields().containerId.value));
   protected readonly hasImage = computed(() => this.previewUrl() !== null);
   protected readonly detectedMarkings = computed(() => {
@@ -635,9 +636,15 @@ export class App {
         lines: lines.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
         durationMs: Math.round(performance.now() - scanStartedAt),
       }]);
-      const containerId = this.extractFields(lines).containerId.value;
+      const fields = this.extractFields(lines);
+      const containerId = fields.containerId.value;
       const partialContainerId = containerId ? '' : this.findContainerIdAnchor(lines);
-      const suggestedCrop = await this.createSuggestedCrop(lines, containerId, image, {
+      if (partialContainerId) {
+        fields.containerId = { value: partialContainerId, confidence: this.containerIdConfidence(lines, partialContainerId) };
+      }
+      this.fields.set(fields);
+      this.analysisSuccessful.set(Boolean(containerId || partialContainerId));
+      const suggestedCrop = await this.createSuggestedCrop(lines, containerId || partialContainerId, image, {
         width: preview.naturalWidth,
         height: preview.naturalHeight,
       });
@@ -1089,6 +1096,13 @@ export class App {
       }
     }
     return partialAnchor;
+  }
+
+  private containerIdConfidence(lines: OcrLine[], containerId: string): number | undefined {
+    const normalizedId = containerId.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    return lines
+      .filter((line) => line.text.replace(/[^A-Z0-9]/gi, '').toUpperCase().includes(normalizedId))
+      .sort((first, second) => second.mean - first.mean)[0]?.mean;
   }
 
   private linesForContainerId(lines: OcrLine[], containerId: string): OcrLine[] {
@@ -1646,6 +1660,10 @@ export class App {
     return [normalized.slice(0, 4), normalized.slice(4, 10), normalized.slice(10, 11)]
       .filter(Boolean)
       .join(' ');
+  }
+
+  protected confidenceText(field: ContainerField): string {
+    return field.confidence === undefined ? '' : `${Math.round(field.confidence * 100)}%`;
   }
 
   private validateContainerId(value: string): boolean {

@@ -22,7 +22,7 @@ The original file is not replaced by a resized OCR image.
 
 ## Crop Mode Selection
 
-The application selects **Manual** by default on Android and iOS. It selects **Auto** by default on other platforms. The user can change the mode before selecting an image.
+The application selects **Auto** by default. The user can change the mode before selecting an image.
 
 Changing the mode after an image has already been selected only changes the selected mode. It does not automatically restart processing for the existing image.
 
@@ -85,12 +85,13 @@ After a photo is selected in Auto mode:
 3. The full-photo OCR pass is limited to 4,000,000 output pixels.
 4. If that pass fails, it retries with a 1,000,000-pixel limit.
 5. The detected OCR boxes are mapped back to the original image dimensions.
-6. If a suitable container ID and markings are found, the application proposes a crop around them.
-7. The user can review and resize the proposed crop.
+6. A complete ISO 6346 container ID, or a same-row partial ID anchor, is accepted as a successful initial detection.
+7. If a suitable ID and markings are found, the application proposes a crop around them.
+8. The user can review and resize the proposed crop.
 
 The suggested crop is not processed automatically. The user must press **Scan selected crop region**. At that point, the selected crop uses the two manual OCR passes described above.
 
-If automatic detection cannot propose a crop, the user can draw one manually. If the user does not draw a crop, scanning processes the full image as the selected region.
+The initial OCR result remains visible in the raw detected text section, including when no crop is proposed. If automatic detection cannot propose a crop, the user can draw one manually. If the user does not draw a crop, scanning processes the full image as the selected region.
 
 ## Pixel-Based Resizing
 
@@ -135,7 +136,7 @@ If OCR fails or times out:
 
 ## Check-Digit Recovery
 
-After the normal crop passes complete, the application accepts a container ID only when it has a valid ISO 6346 check digit. If no normal pass produces a valid ID, it automatically creates a targeted crop around the expected tenth character and runs a separate local OCR pass. The target is restricted to OCR fragments on the same baseline as the first ten ID characters, and only checksum-valid candidates are accepted.
+After the normal crop passes complete, the application accepts a container ID only when it has a valid ISO 6346 check digit. If no normal pass produces a valid ID, it automatically creates a targeted crop around the expected tenth character and runs a separate local OCR pass. The target is restricted to OCR fragments on the same baseline as the first ten ID characters, and only checksum-valid candidates are accepted. A same-row partial ID can still be shown when the check digit is unavailable; it is marked with a warning icon rather than a valid check mark. OCR fragments from different rows are not concatenated into a candidate ID.
 
 The targeted crop is shown as a diagnostic preview and is included in the raw OCR scan list. It does not replace the normal OCR results.
 
@@ -156,6 +157,7 @@ After OCR succeeds:
 
 - Text from all completed passes is deduplicated.
 - Structured container fields are extracted.
+- A whole-number confidence percentage, such as `95%`, is shown for each extracted field when OCR provides one. The status icon and unit remain in one table cell, while the right-aligned confidence percentage is rendered in the adjacent narrower cell without parentheses.
 - The user can edit the extracted fields.
 - The original image Blob is saved to IndexedDB when the user selects **Save on this device**.
 - A separate 160-pixel JPEG thumbnail is generated for the saved-results list.

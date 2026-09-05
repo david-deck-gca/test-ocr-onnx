@@ -92,7 +92,7 @@ describe('App', () => {
 
     const rows = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLTableRowElement>('.field-grid tbody tr')).slice(1);
     expect(rows.map((row) => row.querySelector('th')?.textContent?.trim())).toEqual(['MGW', '', 'TARE', '', 'NET', '']);
-    expect(rows.map((row) => row.querySelector('td:last-child')?.textContent?.trim())).toEqual(['KG', 'LB', 'KG', 'LB', 'KG', 'LB']);
+    expect(rows.map((row) => row.querySelector('td:nth-child(3)')?.textContent?.trim())).toEqual(['KG', 'LB', 'KG', 'LB', 'KG', 'LB']);
     expect(rows[1].querySelector('input')?.getAttribute('aria-label')).toBe('MGW LB');
   });
 
@@ -109,7 +109,7 @@ describe('App', () => {
     }));
     fixture.detectChanges();
 
-    expect((fixture.nativeElement as HTMLElement).querySelector('.capacity-row td:last-child')?.textContent).toBe('CU.M.\u00a0');
+    expect((fixture.nativeElement as HTMLElement).querySelector('.capacity-row td:nth-child(3)')?.textContent).toBe('CU.M.\u00a0');
   });
 
   it('should display the cubic-capacity label only on the first cubic-capacity row', () => {
@@ -166,12 +166,35 @@ describe('App', () => {
 
     const rows = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLTableRowElement>('.field-grid tbody tr'));
     expect(rows.slice(0, 3).map((row) => row.querySelector('th')?.textContent?.trim())).toEqual(['MAX WORKING PRESSURE', '', 'Container ID']);
-    expect(rows[0].querySelector('td:last-child')?.textContent).toBe('BAR');
-    expect(rows[1].querySelector('td:last-child')?.textContent).toBe('PSI');
+    expect(rows[0].querySelector('td:nth-child(3)')?.textContent).toBe('BAR');
+    expect(rows[1].querySelector('td:nth-child(3)')?.textContent).toBe('PSI');
     expect(rows[1].querySelector('input')?.getAttribute('aria-label')).toBe('MAX WORKING PRESSURE PSI');
   });
 
-  it('should render validation and units in the table unit column', () => {
+  it('should render validation and units separately from confidence', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      analysisSuccessful: { set(value: boolean): void };
+      fields: { update(updater: (fields: Record<string, { value: string }>) => Record<string, { value: string }>): void };
+    };
+    app.analysisSuccessful.set(true);
+    app.fields.update((fields) => ({
+       ...fields,
+       containerId: { ...fields['containerId'], value: 'HCSU7997909', confidence: 0.95 },
+       mpgmKg: { ...fields['mpgmKg'], value: '30480', confidence: 1 },
+       capacityCubicMeters: { ...fields['capacityCubicMeters'], value: '67.5' },
+    }));
+    fixture.detectChanges();
+
+    const validation = (fixture.nativeElement as HTMLElement).querySelector('.container-id td:nth-child(3) span');
+    expect(validation?.textContent).toBe('✓');
+    expect(validation?.getAttribute('aria-label')).toBe('ISO 6346 check digit valid');
+    expect((fixture.nativeElement as HTMLElement).querySelector('.container-id td:nth-child(4)')?.textContent).toBe('95%');
+    expect((fixture.nativeElement as HTMLElement).querySelector('tr:not(.container-id) td.confidence')?.textContent).toBe('100%');
+    expect((fixture.nativeElement as HTMLElement).querySelector('.capacity-row td:nth-child(3)')?.textContent).toBe('CU.M.\u00a0');
+  });
+
+  it('should render a warning icon for a partial container ID', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       analysisSuccessful: { set(value: boolean): void };
@@ -180,15 +203,11 @@ describe('App', () => {
     app.analysisSuccessful.set(true);
     app.fields.update((fields) => ({
       ...fields,
-      containerId: { ...fields['containerId'], value: 'HCSU7997909' },
-      capacityCubicMeters: { ...fields['capacityCubicMeters'], value: '67.5' },
+      containerId: { ...fields['containerId'], value: 'EUXU700756' },
     }));
     fixture.detectChanges();
 
-    const validation = (fixture.nativeElement as HTMLElement).querySelector('.container-id td:last-child span');
-    expect(validation?.textContent).toBe('✓');
-    expect(validation?.getAttribute('aria-label')).toBe('ISO 6346 check digit valid');
-    expect((fixture.nativeElement as HTMLElement).querySelector('.capacity-row td:last-child')?.textContent).toBe('CU.M.\u00a0');
+    expect((fixture.nativeElement as HTMLElement).querySelector('.container-id td:nth-child(3) span')?.textContent).toBe('⚠');
   });
 
   it('should leave the ISO code unit column empty', () => {
@@ -206,7 +225,7 @@ describe('App', () => {
 
     const isoRow = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLTableRowElement>('.field-grid tbody tr'))
       .find((row) => row.querySelector('th')?.textContent?.trim() === 'ISO CODE');
-    expect(isoRow?.querySelector('td:last-child')?.textContent).toBe('');
+    expect(isoRow?.querySelector('td:nth-child(3)')?.textContent).toBe('');
   });
 
   it('should show only an empty Container ID field when analysis finds no fields', () => {
@@ -1436,6 +1455,8 @@ describe('App', () => {
     const app = fixture.componentInstance as unknown as {
       imageSelection: number;
       status: () => string;
+      analysisSuccessful: () => boolean;
+      fields: () => Record<string, { value: string; confidence?: number }>;
       waitForPreviewImage: ReturnType<typeof vi.fn>;
       scanAutoCrop: ReturnType<typeof vi.fn>;
       createSuggestedCrop: ReturnType<typeof vi.fn>;
@@ -1451,6 +1472,8 @@ describe('App', () => {
     await app.prepareInitialCrop(new Blob(), 1);
 
     expect(app.status()).toBe('Partial container ID located: HCSU 799790');
+    expect(app.analysisSuccessful()).toBe(true);
+    expect(app.fields()['containerId']).toEqual({ value: 'HCSU799790', confidence: 0.95 });
   });
 
   it('should reject a four-digit ID fragment and select a valid ID from another OCR row', () => {

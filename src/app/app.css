@@ -520,10 +520,16 @@ button {
 .field-grid tbody td:nth-child(2) {
   padding-right: 8px;
 }
-.field-grid tbody td:last-child {
+.unit,.confidence {
   color: #8cae91;
-  padding-left: 8px;
+  white-space: nowrap;
+}
+.confidence {
+  text-align: right !important;
   width: 3rem;
+}
+.unit {
+  width: 3.5rem;
 }
 .field-grid tbody td small {
   display: block;
@@ -540,9 +546,6 @@ button {
 @media (max-width: 760px) {
   .field-grid tbody th {
     width: 5.5rem;
-  }
-  .field-grid tbody td:last-child {
-    width: 3rem;
   }
 }
 .raw-text h3 {

@@ -2,9 +2,9 @@
 
 ## Current status
 
-The Angular 22 PWA shell is implemented. It supports camera capture, device image selection, automatic crop suggestions, manual rectangle crops with previews and saved normalized coordinates, optional cylindrical unwarping with rotation control, editable structured fields, ISO 6346 check-digit validation with targeted OCR recovery, local saved records, and accessible technical diagnostics. Auto mode first scans the full photo to suggest a crop; manual mode waits for a user-selected crop. The user interface does not upload images.
+The Angular 22 PWA shell is implemented. It supports camera capture, device image selection, automatic crop suggestions, manual rectangle crops with previews and saved normalized coordinates, optional cylindrical unwarping with rotation control, editable structured fields, ISO 6346 check-digit validation with targeted OCR recovery, same-row partial-ID detection, per-field confidence percentages, retained initial auto-crop OCR text, local saved records, and accessible technical diagnostics. Auto mode first scans the full photo to suggest a crop; manual mode waits for a user-selected crop. The user interface does not upload images.
 
-The current verification status is `77/77` unit tests passing and a successful production build on 2026-09-04.
+The current verification status is `84/84` unit tests passing and a successful production build on 2026-09-05.
 
 Browser OCR is provided by `@gutenye/ocr-browser`, an MIT-licensed browser implementation built on PaddleOCR and ONNX Runtime. The detector and recognizer sessions initialize during Angular application bootstrap. The package performs detector preprocessing, text-region extraction, recognition preprocessing, and CTC decoding on-device. OpenCV.js is shipped as a local static asset but is not yet used by the crop workflow. The UI reports initialization and inference failures with the original technical details.
 
@@ -20,7 +20,7 @@ The package implements the matching image normalization, detector box decoding, 
 
 ## JSON contract
 
-One input image produces one JSON record. It includes source metadata, manual crop coordinates, `container.id`, ISO code, maximum working pressure in bar and PSI, maximum gross weight (`mpgm`, accepting printed `MPGM`, `MGW`, or `MAX.GR.`), TARE, payload, and capacity values in their printed kg/lb/liter/US-gallon/cubic units, raw text, and warnings. Fields remain empty when their markings are absent. Container IDs are checked against ISO 6346 format and check digit; when normal OCR passes do not produce a valid ID, a targeted same-baseline check-digit OCR pass is attempted automatically. Slash-paired weights can infer a missing opposite unit, and inferred values are marked in the structured result.
+One input image produces one JSON record. It includes source metadata, manual crop coordinates, `container.id`, ISO code, maximum working pressure in bar and PSI, maximum gross weight (`mpgm`, accepting printed `MPGM`, `MGW`, or `MAX.GR.`), TARE, payload, and capacity values in their printed kg/lb/liter/US-gallon/cubic units, OCR confidence values when available, raw text, and warnings. Fields remain empty when their markings are absent. Container IDs are checked against ISO 6346 format and check digit; when normal OCR passes do not produce a valid ID, a targeted same-baseline check-digit OCR pass is attempted automatically. A same-row partial ID can be retained for review with a warning status. OCR fragments from separate rows are not merged into one ID candidate. Slash-paired weights can infer a missing opposite unit, and inferred values are marked in the structured result.
 
 ## Local records and recovery
 
