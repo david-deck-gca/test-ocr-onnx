@@ -1445,7 +1445,7 @@ export class App {
     const text = lines.map((line) => ({ ...line, normalized: line.text.toUpperCase().replace(/[|]/g, 'I') }));
     const find = (pattern: RegExp) => text.find((line) => pattern.test(line.normalized));
     const idCandidates = text.flatMap((line) => {
-      const match = line.normalized.match(/\b([A-Z]{3}[UJZ])\s*((?:\d\s*){5}\d)(?:\s+(\d))?\b/);
+      const match = line.normalized.match(/\b([A-Z]{3}[UJZ])\s*((?:\d\s*){5}\d)\s*(\d)?\b/);
       if (!match) return [];
       const stem = `${match[1]}${match[2].replace(/\s/g, '')}`;
       const checkDigit = match[3] ?? '';
@@ -1467,7 +1467,7 @@ export class App {
       const sameRow = (first: typeof idFragments[number], second: typeof idFragments[number]) => {
         const firstBounds = first.bounds!;
         const secondBounds = second.bounds!;
-        return firstBounds.bottom > secondBounds.top && secondBounds.bottom > firstBounds.top;
+        return this.sameOcrRow(first, second);
       };
       for (let start = 0; start < idFragments.length && !fields.containerId.value; start++) {
         for (let length = 2; length <= 3 && start + length <= idFragments.length; length++) {

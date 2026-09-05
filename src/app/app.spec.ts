@@ -1088,6 +1088,47 @@ describe('App', () => {
     expect(fields['capacityLiters'].value).toBe('25,000');
   });
 
+  it('should fully extract images/iso-tank_frontal.jpg markings', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number; box?: number[][] }>): Record<string, { value: string }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'LASU 2100400', mean: 0.99, box: [[400, 100], [680, 100], [680, 140], [400, 140]] },
+      { text: '22K2', mean: 0.98, box: [[490, 150], [590, 150], [590, 190], [490, 190]] },
+      { text: 'MPGM', mean: 0.97, box: [[470, 620], [540, 620], [540, 650], [470, 650]] },
+      { text: '36000KG', mean: 0.96, box: [[550, 620], [680, 620], [680, 650], [550, 650]] },
+      { text: '79365LB', mean: 0.95, box: [[550, 655], [680, 655], [680, 685], [550, 685]] },
+      { text: 'TARE', mean: 0.97, box: [[470, 690], [540, 690], [540, 720], [470, 720]] },
+      { text: '3650KG', mean: 0.96, box: [[550, 690], [680, 690], [680, 720], [550, 720]] },
+      { text: '8047LB', mean: 0.95, box: [[550, 725], [680, 725], [680, 755], [550, 755]] },
+    ]);
+
+    expect(fields['containerId'].value).toBe('LASU2100400');
+    expect(fields['isoCode'].value).toBe('22K2');
+    expect(fields['mpgmKg'].value).toBe('36000');
+    expect(fields['mpgmLb'].value).toBe('79365');
+    expect(fields['tareKg'].value).toBe('3650');
+    expect(fields['tareLb'].value).toBe('8047');
+    expect(fields['payloadKg'].value).toBe('');
+    expect(fields['payloadLb'].value).toBe('');
+  });
+
+  it('should recover the boxed check digit from images/iso-tank_frontal.jpg', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number; box?: number[][] }>): Record<string, { value: string }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'LASU 210040', mean: 0.99, box: [[400, 100], [650, 100], [650, 140], [400, 140]] },
+      { text: '0', mean: 0.98, box: [[665, 102], [685, 102], [685, 138], [665, 138]] },
+    ]);
+
+    expect(fields['containerId'].value).toBe('LASU2100400');
+  });
+
   it('should detect unlabeled liter and US gallon capacities', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -1474,6 +1515,45 @@ describe('App', () => {
     expect(app.status()).toBe('Partial container ID located: HCSU 799790');
     expect(app.analysisSuccessful()).toBe(true);
     expect(app.fields()['containerId']).toEqual({ value: 'HCSU799790', confidence: 0.95 });
+  });
+
+  it('should report a full ID and all expected fields for images/iso-tank_frontal.jpg', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      imageSelection: number;
+      status: () => string;
+      fields: () => Record<string, { value: string; confidence?: number }>;
+      analysisSuccessful: () => boolean;
+      waitForPreviewImage: ReturnType<typeof vi.fn>;
+      scanAutoCrop: ReturnType<typeof vi.fn>;
+      createSuggestedCrop: ReturnType<typeof vi.fn>;
+      prepareInitialCrop(image: Blob, selection: number): Promise<void>;
+    };
+    app.imageSelection = 1;
+    app.waitForPreviewImage = vi.fn().mockResolvedValue({ naturalWidth: 1200, naturalHeight: 1200 } as HTMLImageElement);
+    app.scanAutoCrop = vi.fn().mockResolvedValue([
+      { text: 'LASU 2100400', mean: 0.99, box: [[400, 100], [680, 100], [680, 140], [400, 140]] },
+      { text: '22K2', mean: 0.98, box: [[490, 150], [590, 150], [590, 190], [490, 190]] },
+      { text: 'MPGM 36000KG', mean: 0.97, box: [[470, 620], [680, 620], [680, 650], [470, 650]] },
+      { text: '79365LB', mean: 0.95, box: [[550, 655], [680, 655], [680, 685], [550, 685]] },
+      { text: 'TARE 3650KG', mean: 0.97, box: [[470, 690], [680, 690], [680, 720], [470, 720]] },
+      { text: '8047LB', mean: 0.95, box: [[550, 725], [680, 725], [680, 755], [550, 755]] },
+    ]);
+    app.createSuggestedCrop = vi.fn().mockResolvedValue({ x: 0.25, y: 0.05, width: 0.5, height: 0.65 });
+
+    await app.prepareInitialCrop(new Blob(), 1);
+
+    expect(app.fields()['containerId'].value).toBe('LASU2100400');
+    expect(app.fields()['isoCode'].value).toBe('22K2');
+    expect(app.fields()['mpgmKg'].value).toBe('36000');
+    expect(app.fields()['mpgmLb'].value).toBe('79365');
+    expect(app.fields()['tareKg'].value).toBe('3650');
+    expect(app.fields()['tareLb'].value).toBe('8047');
+    expect(app.fields()['payloadKg'].value).toBe('');
+    expect(app.fields()['payloadLb'].value).toBe('');
+    expect(app.status()).toMatch(/^Container ID located: LASU 210040 0\./);
+    expect(app.status()).not.toContain('Partial container ID');
+    expect(app.analysisSuccessful()).toBe(true);
   });
 
   it('should reject a four-digit ID fragment and select a valid ID from another OCR row', () => {
