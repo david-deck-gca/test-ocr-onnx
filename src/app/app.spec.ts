@@ -1638,6 +1638,7 @@ describe('App', () => {
     expect(app.fields()['capacityLiters'].confidence).toBe(0.96);
     expect(app.status()).toContain('Automatic 2x scan completed because MGW 80%, TARE 84%, PAYLOAD 78%, CAPACITY 81% was below 85%.');
     expect(app.scanCropRegion).toHaveBeenCalledWith(expect.any(Blob), expect.objectContaining({ width: expect.any(Number), height: expect.any(Number) }), 2, 4_000_000, expect.anything());
+    expect(app.cropDraft().x).toBeLessThan(0.2);
     expect(app.cropDraft().width).toBeLessThan(0.3);
     expect(app.cropDraft().x + app.cropDraft().width).toBeLessThan(0.5);
   });

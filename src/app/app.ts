@@ -112,7 +112,7 @@ export class App {
     const markings = this.detectedMarkings();
     return {
       gross: markings.mpgm ? 'MPGM' : markings.mgw ? 'MGW' : markings.maxGr ? 'MAX.GR.' : '',
-      payload: markings.payload ? 'PAYLOAD' : markings.net ? 'NET' : '',
+      payload: markings.payload ? 'PAYLOAD' : markings.net || this.fields().payloadKg.value ? 'NET' : '',
     };
   });
 
@@ -1121,7 +1121,8 @@ export class App {
     const height = sourceSize?.height ?? decodedImage!.height;
     try {
       const padding = Math.max(24, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.08);
-      const left = Math.max(0, markingsBounds.left - padding);
+      const leftPadding = Math.max(48, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.15);
+      const left = Math.max(0, markingsBounds.left - leftPadding);
       const top = Math.max(0, markingsBounds.top - padding);
       const right = Math.min(width, markingsBounds.right + padding);
       const bottom = Math.min(height, markingsBounds.bottom + padding);
@@ -1725,7 +1726,9 @@ export class App {
     if (!hasGrossLabel || hasTareLabel || hasPayloadLabel) {
       return;
     }
+    const grossIndex = lines.findIndex((line) => /\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT|\bMAX\.?\s*GR\.?/.test(line.normalized));
     const unlabeledRows = lines
+      .slice(grossIndex + 1)
       .filter((line) => !/\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT|\bMAX\.?\s*GR\.?|\bTARE\b|\bPAY(?:LOAD|J?LAD|JLOAD)(?=\s|\d|$)|\bNET(?:\s*WEIGHT)?\b/.test(line.normalized))
       .map((line) => ({
         line,
@@ -1740,11 +1743,14 @@ export class App {
         fields[key] = { value: match[1].trim(), unit: 'KG', confidence: row.line.mean, inferred: true };
       }
     };
-    recover(unlabeledRows[0], 'tareKg', unlabeledRows[0]?.kg ?? null);
-    if (unlabeledRows[0]?.lb && !fields.tareLb.value) fields.tareLb = { value: unlabeledRows[0].lb[1].trim(), unit: 'LB', confidence: unlabeledRows[0].line.mean, inferred: true };
-    const payloadRow = unlabeledRows[1];
-    recover(payloadRow, 'payloadKg', payloadRow?.kg ?? null);
-    if (payloadRow?.lb && !fields.payloadLb.value) fields.payloadLb = { value: payloadRow.lb[1].trim(), unit: 'LB', confidence: payloadRow.line.mean, inferred: true };
+    const kgRows = unlabeledRows.filter((row) => row.kg);
+    const firstKgIndex = unlabeledRows.findIndex((row) => row.kg);
+    const firstKgHasLb = firstKgIndex >= 0 && Boolean(unlabeledRows[firstKgIndex].lb);
+    const lbRows = unlabeledRows.filter((row, index) => row.lb && (firstKgHasLb ? index >= firstKgIndex : index > firstKgIndex));
+    recover(kgRows[0], 'tareKg', kgRows[0]?.kg ?? null);
+    recover(kgRows[1], 'payloadKg', kgRows[1]?.kg ?? null);
+    if (lbRows[0]?.lb && !fields.tareLb.value) fields.tareLb = { value: lbRows[0].lb[1].trim(), unit: 'LB', confidence: lbRows[0].line.mean, inferred: true };
+    if (lbRows[1]?.lb && !fields.payloadLb.value) fields.payloadLb = { value: lbRows[1].lb[1].trim(), unit: 'LB', confidence: lbRows[1].line.mean, inferred: true };
   }
 
   private formatContainerId(value: string): string {
