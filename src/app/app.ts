@@ -115,8 +115,10 @@ export class App {
   });
   protected readonly detectedWeightLabels = computed(() => {
     const markings = this.detectedMarkings();
+    const text = this.rawText().join('\n').toUpperCase();
+    const unTankGross = /\bUN\s*TANK\b/.test(text) && Boolean(this.fields().mpgmKg.value);
     return {
-      gross: markings.mpgm ? 'MPGM' : markings.mgw ? 'MGW' : markings.maxGr ? 'MAX.GR.' : '',
+      gross: markings.mpgm ? 'MPGM' : markings.mgw ? 'MGW' : markings.maxGr || unTankGross ? 'MAX.GR.' : '',
       payload: markings.payload ? 'PAYLOAD' : markings.net || this.fields().payloadKg.value ? 'NET' : '',
     };
   });

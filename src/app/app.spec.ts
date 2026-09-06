@@ -171,6 +171,27 @@ describe('App', () => {
     expect(rows[1].querySelector('input')?.getAttribute('aria-label')).toBe('MAX WORKING PRESSURE PSI');
   });
 
+  it('should use the UN tank gross position when its weight label is obscured', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      analysisSuccessful: { set(value: boolean): void };
+      rawText: { set(value: string[]): void };
+      fields: { update(updater: (fields: Record<string, { value: string }>) => Record<string, { value: string }>): void };
+    };
+    app.analysisSuccessful.set(true);
+    app.rawText.set(['UN TANK T22', 'AXGROSS WEIGHT 4300KG/9480bs']);
+    app.fields.update((fields) => ({
+      ...fields,
+      mpgmKg: { ...fields['mpgmKg'], value: '4300' },
+      mpgmLb: { ...fields['mpgmLb'], value: '9480' },
+    }));
+    fixture.detectChanges();
+
+    const grossRow = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLTableRowElement>('.field-grid tbody tr'))
+      .find((row) => row.querySelector('input')?.value === '4300');
+    expect(grossRow?.querySelector('th')?.textContent?.trim()).toBe('MAX.GR.');
+  });
+
   it('should render validation and units separately from confidence', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
