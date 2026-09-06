@@ -1129,6 +1129,79 @@ describe('App', () => {
     expect(fields['capacityLiters'].value).toBe('25,000');
   });
 
+  it('should extract UN TANK fields positionally and export them', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
+      fields: { set(value: Record<string, { value: string; unit?: string; confidence?: number }>): void };
+      createJsonPayload(): { container: { unTank: Record<string, { value: string }> } };
+    };
+
+    const fields = app.extractFields([
+      { text: '22 A1 RID-ADR-IMDG', mean: 0.99 },
+      { text: 'UN TANK T11', mean: 0.98 },
+      { text: '30,480 KG / 67,200 LB', mean: 0.97 },
+      { text: '2,100 KG / 4,630 LB', mean: 0.96 },
+      { text: '33,200 L / 8,770 US GAL', mean: 0.95 },
+      { text: '33', mean: 0.94 },
+      { text: 'UN 1203', mean: 0.93 },
+    ]);
+
+    expect(fields['isoCode'].value).toBe('');
+    expect(fields['approvalCode'].value).toBe('22A1');
+    expect(fields['applicableRegulations'].value).toBe('RID-ADR-IMDG');
+    expect(fields['tankCode'].value).toBe('T11');
+    expect(fields['mpgmKg'].value).toBe('30,480');
+    expect(fields['mpgmLb'].value).toBe('67,200');
+    expect(fields['tareKg'].value).toBe('2,100');
+    expect(fields['tareLb'].value).toBe('4,630');
+    expect(fields['capacityLiters'].value).toBe('33,200');
+    expect(fields['capacityUsGallons'].value).toBe('8,770');
+    expect(fields['kemlerCode'].value).toBe('33');
+    expect(fields['unNumber'].value).toBe('1203');
+
+    app.fields.set(fields);
+    const exported = app.createJsonPayload();
+    expect(Object.fromEntries(Object.entries(exported.container.unTank).map(([key, field]) => [key, field.value]))).toEqual({
+      approvalCode: '22A1',
+      applicableRegulations: 'RID-ADR-IMDG',
+      tankCode: 'T11',
+      kemlerCode: '33',
+      unNumber: '1203',
+    });
+  });
+
+  it('should infer missing UN TANK weight units from slash-separated positions', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string; inferred?: boolean }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'UN TANK T11 22A1 Applicable Regulations', mean: 0.99 },
+      { text: '30,480 KG / 67,200', mean: 0.98 },
+      { text: '2,100 / 4,630 LBS', mean: 0.97 },
+      { text: '33,200 L / 8,770 US GAL', mean: 0.96 },
+      { text: '33', mean: 0.95 },
+      { text: '1203', mean: 0.94 },
+    ]);
+
+    expect(fields['mpgmKg']).toMatchObject({ value: '30,480', inferred: false });
+    expect(fields['mpgmLb']).toMatchObject({ value: '67,200', inferred: true });
+    expect(fields['tareKg']).toMatchObject({ value: '2,100', inferred: true });
+    expect(fields['tareLb']).toMatchObject({ value: '4,630', inferred: false });
+
+    const bothMissing = app.extractFields([
+      { text: 'UN TANK T11 22A1 Applicable Regulations', mean: 0.99 },
+      { text: '30,480 / 67,200', mean: 0.98 },
+      { text: '2,100 / 4,630', mean: 0.97 },
+    ]);
+    expect(bothMissing['mpgmKg'].inferred).toBe(true);
+    expect(bothMissing['mpgmLb'].inferred).toBe(true);
+    expect(bothMissing['tareKg'].inferred).toBe(true);
+    expect(bothMissing['tareLb'].inferred).toBe(true);
+  });
+
   it('should fully extract images/iso-tank_frontal.jpg markings', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {

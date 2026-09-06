@@ -179,4 +179,45 @@ test.describe('real OCR regressions', () => {
       }
     }
   });
+
+  test('extracts the UN tank 3 markings', async ({ page }) => {
+    test.setTimeout(180_000);
+
+    await page.goto('/');
+    await page.locator('input[type="file"]').setInputFiles(path.resolve('images/un-tank_3.JPG'));
+
+    const status = page.locator('.status');
+    await expect(status).not.toHaveClass(/busy/, { timeout: 150_000 });
+    await expect(page.locator('.diagnostics')).toHaveCount(0);
+
+    const expectedFields = [
+      ['MAX WORKING PRESSURE', '10', 'BAR'],
+      ['Container ID', 'EUXU 700755 3', null],
+      ['APPROVAL CODE', '58K2', null],
+      ['APPLICABLE REGULATIONS', 'RID-ADR-IMDG', null],
+      ['TANK CODE', 'T22', null],
+      ['MAX.GR.', '4300', 'KG'],
+      ['MAX.GR. LB', '9480', 'LB'],
+      ['TARE', '772', 'KG'],
+      ['TARE LB', '1701', 'LB'],
+      ['CAPACITY', '1108', 'L'],
+      ['CAPACITY US GAL', '293', 'US GAL'],
+      ['KEMLER CODE', '368', null],
+      ['UN NUMBER', '3286', null],
+    ] as const;
+
+    for (const [label, value, unit] of expectedFields) {
+      const row = label.endsWith(' LB') || label.endsWith('US GAL')
+        ? page.locator('tr').filter({ has: page.locator(`input[aria-label="${label}"]`) })
+        : page.locator('tr').filter({
+          has: page.getByRole('rowheader', { name: label, exact: true }),
+        });
+
+      await expect(row).toHaveCount(1);
+      await expect(row.locator('input')).toHaveValue(value);
+      if (unit !== null) {
+        await expect(row.locator('.unit')).toContainText(unit);
+      }
+    }
+  });
 });

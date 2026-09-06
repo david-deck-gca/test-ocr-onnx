@@ -2,7 +2,7 @@ import { Component, ElementRef, Injector, afterNextRender, computed, inject, sig
 import { OcrService } from './ocr.service';
 
 type CaptureMode = 'auto-crop' | 'manual-crop';
-type FieldKey = 'maxWorkingPressureBar' | 'maxWorkingPressurePsi' | 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters' | 'capacityUsGallons' | 'capacityCubicMeters' | 'capacityCubicFeet';
+type FieldKey = 'maxWorkingPressureBar' | 'maxWorkingPressurePsi' | 'containerId' | 'isoCode' | 'approvalCode' | 'applicableRegulations' | 'tankCode' | 'kemlerCode' | 'unNumber' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters' | 'capacityUsGallons' | 'capacityCubicMeters' | 'capacityCubicFeet';
 type OcrLine = { text: string; mean: number; box?: number[][] };
 type UnwarpGeometry = { rotation: number; curvature: number; reliable: boolean };
 type CropRect = { x: number; y: number; width: number; height: number };
@@ -83,6 +83,11 @@ export class App {
     maxWorkingPressurePsi: { value: '', unit: 'PSI' },
     containerId: { value: '' },
     isoCode: { value: '' },
+    approvalCode: { value: '' },
+    applicableRegulations: { value: '' },
+    tankCode: { value: '' },
+    kemlerCode: { value: '' },
+    unNumber: { value: '' },
     mpgmKg: { value: '', unit: 'KG' },
     mpgmLb: { value: '', unit: 'LB' },
     tareKg: { value: '', unit: 'KG' },
@@ -563,6 +568,11 @@ export class App {
       maxWorkingPressurePsi: { value: '', unit: 'PSI' },
       containerId: { value: '' },
       isoCode: { value: '' },
+      approvalCode: { value: '' },
+      applicableRegulations: { value: '' },
+      tankCode: { value: '' },
+      kemlerCode: { value: '' },
+      unNumber: { value: '' },
       mpgmKg: { value: '', unit: 'KG' },
       mpgmLb: { value: '', unit: 'LB' },
       tareKg: { value: '', unit: 'KG' },
@@ -1122,7 +1132,7 @@ export class App {
     try {
       const padding = Math.max(24, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.08);
       const leftPadding = Math.max(48, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.12);
-      const rightPadding = Math.max(48, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.06);
+      const rightPadding = Math.max(48, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.07);
       const left = Math.max(0, markingsBounds.left - leftPadding);
       const top = Math.max(0, markingsBounds.top - padding);
       const right = Math.min(width, markingsBounds.right + rightPadding);
@@ -1475,6 +1485,13 @@ export class App {
         maxWorkingPressure: { bar: fields.maxWorkingPressureBar, psi: fields.maxWorkingPressurePsi },
         id: { ...fields.containerId, iso6346Valid: this.containerIdValid() },
         isoCode: fields.isoCode,
+        unTank: {
+          approvalCode: fields.approvalCode,
+          applicableRegulations: fields.applicableRegulations,
+          tankCode: fields.tankCode,
+          kemlerCode: fields.kemlerCode,
+          unNumber: fields.unNumber,
+        },
         mpgm: { kg: fields.mpgmKg, lb: fields.mpgmLb },
         tare: { kg: fields.tareKg, lb: fields.tareLb },
         payload: { kg: fields.payloadKg, lb: fields.payloadLb },
@@ -1528,6 +1545,8 @@ export class App {
     const fields: Record<FieldKey, ContainerField> = {
       maxWorkingPressureBar: { value: '', unit: 'BAR' }, maxWorkingPressurePsi: { value: '', unit: 'PSI' },
       containerId: { value: '' }, isoCode: { value: '' },
+      approvalCode: { value: '' }, applicableRegulations: { value: '' }, tankCode: { value: '' },
+      kemlerCode: { value: '' }, unNumber: { value: '' },
       mpgmKg: { value: '', unit: 'KG' }, mpgmLb: { value: '', unit: 'LB' },
       tareKg: { value: '', unit: 'KG' }, tareLb: { value: '', unit: 'LB' },
       payloadKg: { value: '', unit: 'KG' }, payloadLb: { value: '', unit: 'LB' },
@@ -1579,9 +1598,54 @@ export class App {
         }
       }
     }
-    const isoLine = find(/\b[0-9]{2}[A-Z][0-9A-Z]\b/);
+    const unTankIndex = text.findIndex((line) => /\bUN\s*TANK\b/.test(line.normalized));
+    const isoLine = unTankIndex < 0 ? find(/\b[0-9]{2}[A-Z][0-9A-Z]\b/) : undefined;
     if (isoLine) {
       fields.isoCode = { value: isoLine.normalized.match(/\b[0-9]{2}[A-Z][0-9A-Z]\b/)![0], confidence: isoLine.mean };
+    }
+
+    if (unTankIndex >= 0) {
+      const tankLine = text[unTankIndex];
+      const tankRemainder = tankLine.normalized.split(/\bUN\s*TANK\b/)[1]?.replace(/^\s*[:.-]?\s*/, '').trim() ?? '';
+      const approvalLine = text.find((line) => /\b[0-9A-Z]{2}\s*[A-Z]\s*[0-9]\b\s+.+$/.test(line.normalized));
+      const approvalMatch = approvalLine?.normalized.match(/\b([0-9A-Z]{2})\s*([A-Z])\s*([0-9])\b\s+(.+)$/);
+      const regulationsValue = approvalMatch?.[4].replace(/^APPLICABLE\s+REGULATIONS\s*:?-?\s*/i, '').trim() ?? '';
+      const tankCodeText = tankRemainder
+        .replace(approvalMatch?.[0] ?? '', '')
+        .trim();
+      const tankCode = tankCodeText.match(/^([0-9A-Z][0-9A-Z./-]*)/)?.[1];
+      if (approvalMatch && approvalLine) fields.approvalCode = { value: `${approvalMatch[1]}${approvalMatch[2]}${approvalMatch[3]}`, confidence: approvalLine.mean };
+      if (regulationsValue && approvalLine) fields.applicableRegulations = { value: regulationsValue, confidence: approvalLine.mean };
+      if (tankCode) fields.tankCode = { value: tankCode, confidence: tankLine.mean };
+
+      const followingLines = text.slice(unTankIndex + 1, unTankIndex + 6);
+      const parseTankWeight = (line: typeof text[number] | undefined) => {
+        const match = line?.normalized.match(/(\d[\d ,.]*?)\s*(KG|LBS?|IBS?|BS?)?\s*\/\s*(\d[\d ,.]*?)\s*(KG|LBS?|IBS?|BS?)?\s*$/);
+        if (!match) return undefined;
+        const firstUnit = match[2] === 'KG' ? 'KG' : match[2] ? 'LB' : undefined;
+        const secondUnit = match[4] === 'KG' ? 'KG' : match[4] ? 'LB' : undefined;
+        return {
+          kg: { value: match[1].trim(), inferred: firstUnit !== 'KG' },
+          lb: { value: match[3].trim(), inferred: secondUnit !== 'LB' },
+        };
+      };
+      const gross = parseTankWeight(followingLines[0]);
+      const tare = parseTankWeight(followingLines[1]);
+      const capacity = followingLines[2]?.normalized.match(/(\d[\d ,.]*?)\s*L\b[^\d]*(\d[\d ,.]*?)\s*(?:US\s*)?GAL\b/);
+      const setTankWeight = (pair: ReturnType<typeof parseTankWeight>, kgKey: 'mpgmKg' | 'tareKg', lbKey: 'mpgmLb' | 'tareLb', line: typeof text[number] | undefined) => {
+        if (!line) return;
+        if (!pair) return;
+        fields[kgKey] = { value: pair.kg.value, unit: 'KG', confidence: line.mean, inferred: pair.kg.inferred };
+        fields[lbKey] = { value: pair.lb.value, unit: 'LB', confidence: line.mean, inferred: pair.lb.inferred };
+      };
+      setTankWeight(gross, 'mpgmKg', 'mpgmLb', followingLines[0]);
+      setTankWeight(tare, 'tareKg', 'tareLb', followingLines[1]);
+      if (followingLines[2] && capacity) {
+        fields.capacityLiters = { value: capacity[1].trim(), unit: 'L', confidence: followingLines[2].mean };
+        fields.capacityUsGallons = { value: capacity[2].trim(), unit: 'US GAL', confidence: followingLines[2].mean };
+      }
+      if (followingLines[3]) fields.kemlerCode = { value: followingLines[3].normalized.trim(), confidence: followingLines[3].mean };
+      if (followingLines[4]) fields.unNumber = { value: followingLines[4].normalized.replace(/^UN\s*/, '').trim(), confidence: followingLines[4].mean };
     }
 
     const weightAfter = (label: RegExp, unit: 'KG' | 'LB') => {
@@ -1700,10 +1764,12 @@ export class App {
     const maxWorkingPressurePsi = pressureAfter(/MAX\s*WORKING\s*PRESSURE/, 'PSI');
     fields.maxWorkingPressureBar = { value: maxWorkingPressureBar?.value ?? '', unit: 'BAR', confidence: maxWorkingPressureBar?.confidence };
     fields.maxWorkingPressurePsi = { value: maxWorkingPressurePsi?.value ?? '', unit: 'PSI', confidence: maxWorkingPressurePsi?.confidence };
-    fields.mpgmKg = { value: mpgmKg?.value ?? '', unit: 'KG', confidence: mpgmKg?.confidence, inferred: mpgmKg?.inferred };
-    fields.mpgmLb = { value: mpgmLb?.value ?? '', unit: 'LB', confidence: mpgmLb?.confidence, inferred: mpgmLb?.inferred };
-    fields.tareKg = { value: tareKg?.value ?? '', unit: 'KG', confidence: tareKg?.confidence, inferred: tareKg?.inferred };
-    fields.tareLb = { value: tareLb?.value ?? '', unit: 'LB', confidence: tareLb?.confidence, inferred: tareLb?.inferred };
+    if (unTankIndex < 0) {
+      fields.mpgmKg = { value: mpgmKg?.value ?? '', unit: 'KG', confidence: mpgmKg?.confidence, inferred: mpgmKg?.inferred };
+      fields.mpgmLb = { value: mpgmLb?.value ?? '', unit: 'LB', confidence: mpgmLb?.confidence, inferred: mpgmLb?.inferred };
+      fields.tareKg = { value: tareKg?.value ?? '', unit: 'KG', confidence: tareKg?.confidence, inferred: tareKg?.inferred };
+      fields.tareLb = { value: tareLb?.value ?? '', unit: 'LB', confidence: tareLb?.confidence, inferred: tareLb?.inferred };
+    }
     fields.payloadKg = payloadKg
       ? { value: payloadKg.value, unit: 'KG', confidence: payloadKg.confidence, inferred: payloadKg.inferred }
       : { value: '', unit: 'KG' };
@@ -1711,8 +1777,10 @@ export class App {
       ? { value: payloadLb.value, unit: 'LB', confidence: payloadLb.confidence, inferred: payloadLb.inferred }
       : { value: '', unit: 'LB' };
     this.recoverMissingWeightRows(fields, text);
-    fields.capacityLiters = { value: capacityLiters?.value ?? '', unit: 'L', confidence: capacityLiters?.confidence };
-    fields.capacityUsGallons = { value: capacityUsGallons?.value ?? '', unit: 'US GAL', confidence: capacityUsGallons?.confidence };
+    if (unTankIndex < 0) {
+      fields.capacityLiters = { value: capacityLiters?.value ?? '', unit: 'L', confidence: capacityLiters?.confidence };
+      fields.capacityUsGallons = { value: capacityUsGallons?.value ?? '', unit: 'US GAL', confidence: capacityUsGallons?.confidence };
+    }
     fields.capacityCubicMeters = { value: capacityCubicMeters?.value ?? '', unit: 'CU.M.', confidence: capacityCubicMeters?.confidence };
     fields.capacityCubicFeet = { value: capacityCubicFeet?.value ?? '', unit: 'CU.FT.', confidence: capacityCubicFeet?.confidence };
     return fields;
