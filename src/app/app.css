@@ -149,7 +149,7 @@ button {
   font:
     700 0.9rem/1 Arial,
     sans-serif;
-  padding: 12px 15px;
+  padding: 12px 8px;
 }
 button:disabled {
   cursor: not-allowed;
@@ -329,7 +329,7 @@ video {
 .capture-mode-button,
 .saved-results .text-button {
   font-size: 0.72rem;
-  padding: 6px 9px;
+  padding: 6px 5px;
 }
 .capture-mode-button.active {
   box-shadow: inset 0 2px 3px #10201799;
@@ -434,9 +434,7 @@ video {
 }
 .raw-text h3 {
   color: #dce8de;
-  font:
-    700 0.85rem Georgia,
-    serif;
+  font: 700 0.85rem Arial, sans-serif;
   margin: 0;
 }
 .raw-scans {
@@ -482,12 +480,6 @@ video {
   .workspace {
     grid-template-columns: 1fr;
   }
-}
-button {
-  padding-inline: 8px;
-}
-.capture-mode-button {
-  padding-inline: 5px;
 }
 :host * {
   font-size: 0.72rem !important;
@@ -561,23 +553,4 @@ button {
   .field-grid tbody th {
     width: 5.5rem;
   }
-}
-.raw-text h3 {
-  font-family: Arial;
-}
-.field-grid tr.capacity-row {
-  display: table-row;
-}
-.field-grid tr.capacity-row > * {
-  white-space: nowrap;
-}
-.raw-text th:first-child,
-.raw-text td:first-child {
-  padding-left: 0;
-  text-align: left;
-}
-.raw-text th:last-child,
-.raw-text td:last-child {
-  padding-right: 0;
-  text-align: right;
 }
