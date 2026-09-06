@@ -543,6 +543,20 @@ button {
   text-align: right;
   width: 100%;
 }
+.inferred-container-id {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+}
+.inferred-container-id input:first-child {
+  min-width: 0;
+}
+.inferred-container-id .inferred-check-digit {
+  color: #f06b63;
+  font-weight: 700;
+  max-width: 2.3rem;
+  text-align: center;
+}
 @media (max-width: 760px) {
   .field-grid tbody th {
     width: 5.5rem;

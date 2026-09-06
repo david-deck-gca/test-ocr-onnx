@@ -1,5 +1,16 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
 import path from 'node:path';
+
+async function expectContainerId(row: Locator, expected: string): Promise<void> {
+  const expectedCanonical = expected.replace(/\s/g, '');
+  await expect.poll(async () => {
+    const stemInput = row.locator('input[aria-label="Container ID"]');
+    const inferredDigitInput = row.locator('input[aria-label="Inferred container ID check digit"]');
+    const stem = await stemInput.inputValue();
+    const digit = await inferredDigitInput.count() ? await inferredDigitInput.inputValue() : '';
+    return `${stem}${digit}`.replace(/\s/g, '');
+  }).toBe(expectedCanonical);
+}
 
 test.describe('real OCR regressions', () => {
   test('extracts the frontal ISO tank markings', async ({ page }) => {
@@ -22,14 +33,15 @@ test.describe('real OCR regressions', () => {
     ] as const;
 
     for (const [label, value, unit] of expectedFields) {
-      const row = label.endsWith(' LB')
+      const row = label === 'Container ID' || label.endsWith(' LB')
         ? page.locator('tr').filter({ has: page.locator(`input[aria-label="${label}"]`) })
         : page.locator('tr').filter({
           has: page.getByRole('rowheader', { name: label, exact: true }),
         });
 
       await expect(row).toHaveCount(1);
-      await expect(row.locator('input')).toHaveValue(value);
+      if (label === 'Container ID') await expectContainerId(row, value);
+      else await expect(row.locator('input')).toHaveValue(value);
       if (unit !== null) {
         await expect(row.locator('.unit')).toHaveText(unit);
       }
@@ -61,7 +73,8 @@ test.describe('real OCR regressions', () => {
       });
 
       await expect(row).toHaveCount(1);
-      await expect(row.locator('input')).toHaveValue(value);
+      if (label === 'Container ID') await expectContainerId(row, value);
+      else await expect(row.locator('input')).toHaveValue(value);
       if (unit !== null) {
         await expect(row.locator('.unit')).toHaveText(unit);
       }
@@ -91,14 +104,15 @@ test.describe('real OCR regressions', () => {
     ] as const;
 
     for (const [label, value, unit] of expectedFields) {
-      const row = label.includes(' LB') || label.endsWith('CU.FT.')
+      const row = label === 'Container ID' || label.includes(' LB') || label.endsWith('CU.FT.')
         ? page.locator('tr').filter({ has: page.locator(`input[aria-label="${label}"]`) })
         : page.locator('tr').filter({
           has: page.getByRole('rowheader', { name: label, exact: true }),
         });
 
       await expect(row).toHaveCount(1);
-      await expect(row.locator('input')).toHaveValue(value);
+      if (label === 'Container ID') await expectContainerId(row, value);
+      else await expect(row.locator('input')).toHaveValue(value);
       if (unit !== null) {
         await expect(row.locator('.unit')).toHaveText(unit);
       }
@@ -128,14 +142,15 @@ test.describe('real OCR regressions', () => {
     ] as const;
 
     for (const [label, value, unit] of expectedFields) {
-      const row = label.includes(' LB') || label.endsWith('CU.FT.')
+      const row = label === 'Container ID' || label.includes(' LB') || label.endsWith('CU.FT.')
         ? page.locator('tr').filter({ has: page.locator(`input[aria-label="${label}"]`) })
         : page.locator('tr').filter({
           has: page.getByRole('rowheader', { name: label, exact: true }),
         });
 
       await expect(row).toHaveCount(1);
-      await expect(row.locator('input')).toHaveValue(value);
+      if (label === 'Container ID') await expectContainerId(row, value);
+      else await expect(row.locator('input')).toHaveValue(value);
       if (unit !== null) {
         await expect(row.locator('.unit')).toContainText(unit);
       }
@@ -166,14 +181,15 @@ test.describe('real OCR regressions', () => {
     ] as const;
 
     for (const [label, value, unit] of expectedFields) {
-      const row = label.includes(' LB') || label.endsWith('CU.FT.')
+      const row = label === 'Container ID' || label.includes(' LB') || label.endsWith('CU.FT.')
         ? page.locator('tr').filter({ has: page.locator(`input[aria-label="${label}"]`) })
         : page.locator('tr').filter({
           has: page.getByRole('rowheader', { name: label, exact: true }),
         });
 
       await expect(row).toHaveCount(1);
-      await expect(row.locator('input')).toHaveValue(value);
+      if (label === 'Container ID') await expectContainerId(row, value);
+      else await expect(row.locator('input')).toHaveValue(value);
       if (unit !== null) {
         await expect(row.locator('.unit')).toContainText(unit);
       }
@@ -207,14 +223,15 @@ test.describe('real OCR regressions', () => {
     ] as const;
 
     for (const [label, value, unit] of expectedFields) {
-      const row = label.endsWith(' LB') || label.endsWith('US GAL')
+      const row = label === 'Container ID' || label.endsWith(' LB') || label.endsWith('US GAL')
         ? page.locator('tr').filter({ has: page.locator(`input[aria-label="${label}"]`) })
         : page.locator('tr').filter({
           has: page.getByRole('rowheader', { name: label, exact: true }),
         });
 
       await expect(row).toHaveCount(1);
-      await expect(row.locator('input')).toHaveValue(value);
+      if (label === 'Container ID') await expectContainerId(row, value);
+      else await expect(row.locator('input')).toHaveValue(value);
       if (unit !== null) {
         await expect(row.locator('.unit')).toContainText(unit);
       }
@@ -248,7 +265,7 @@ test.describe('real OCR regressions', () => {
     ] as const;
 
     for (const [label, value, unit] of expectedFields) {
-      const row = label.endsWith(' LB') || label.endsWith('US GAL')
+      const row = label === 'Container ID' || label.endsWith(' LB') || label.endsWith('US GAL')
         ? page.locator('tr').filter({ has: page.locator(`input[aria-label="${label}"]`) })
         : page.locator('tr').filter({
           has: page.getByRole('rowheader', { name: label, exact: true }),
@@ -260,5 +277,57 @@ test.describe('real OCR regressions', () => {
         await expect(row.locator('.unit')).toContainText(unit);
       }
     }
+  });
+
+  test('extracts the small UN tank markings and recovers its check digit', async ({ page }) => {
+    test.setTimeout(180_000);
+
+    await page.goto('/');
+    await page.locator('input[type="file"]').setInputFiles(path.resolve('images/un-tank_small.jpg'));
+
+    const status = page.locator('.status');
+    await expect(status).not.toHaveClass(/busy/, { timeout: 150_000 });
+    await expect(page.locator('.diagnostics')).toHaveCount(0);
+
+    const expectedFields = [
+      ['MAX WORKING PRESSURE', '10', 'BAR'],
+      ['Container ID', 'EUXU 700756 9', null],
+      ['APPROVAL CODE', '58K2', null],
+      ['APPLICABLE REGULATIONS', 'RID-ADR-IMDG', null],
+      ['TANK CODE', 'T22', null],
+      ['MAX.GR.', '4300', 'KG'],
+      ['MAX.GR. LB', '9480', 'LB'],
+      ['TARE', '773', 'KG'],
+      ['TARE LB', '1704', 'LB'],
+      ['CAPACITY', '1105', 'L'],
+      ['CAPACITY US GAL', '292', 'US GAL'],
+      ['KEMLER CODE', '368', null],
+      ['UN NUMBER', '3286', null],
+    ] as const;
+
+    for (const [label, value, unit] of expectedFields) {
+      const row = label === 'Container ID' || label.endsWith(' LB') || label.endsWith('US GAL')
+        ? page.locator('tr').filter({ has: page.locator(`input[aria-label="${label}"]`) })
+        : page.locator('tr').filter({ has: page.getByRole('rowheader', { name: label, exact: true }) });
+
+      await expect(row).toHaveCount(1);
+      if (label === 'Container ID') {
+        const fullIdInput = row.locator('input[aria-label="Container ID"]');
+        const inferredDigitInput = row.locator('input[aria-label="Inferred container ID check digit"]');
+        if (await inferredDigitInput.count()) {
+          await expect(fullIdInput).toHaveValue('EUXU 700756');
+          await expect(inferredDigitInput).toHaveValue('9');
+          await expect(row.locator('.unit span')).toHaveAttribute('aria-label', 'ISO 6346 check digit inferred');
+        } else {
+          await expect(fullIdInput).toHaveValue(value);
+        }
+      } else {
+        await expect(row.locator('input')).toHaveValue(value);
+        if (unit !== null) await expect(row.locator('.unit')).toContainText(unit);
+      }
+    }
+
+    await expect(page.getByRole('heading', { name: 'Raw detected text' })).toBeVisible();
+    await expect(page.locator('.raw-scans > section')).not.toHaveCount(0);
   });
 });

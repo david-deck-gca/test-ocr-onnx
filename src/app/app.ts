@@ -102,6 +102,8 @@ export class App {
   protected readonly containerIdValid = computed(() => this.validateContainerId(this.fields().containerId.value));
   protected readonly containerIdPartial = computed(() => /^[A-Z]{3}[UJZ]\d{6}$/.test(this.fields().containerId.value));
   protected readonly formattedContainerId = computed(() => this.formatContainerId(this.fields().containerId.value));
+  protected readonly formattedContainerIdStem = computed(() => this.formatContainerId(this.fields().containerId.value.slice(0, 10)));
+  protected readonly inferredContainerIdDigit = computed(() => this.fields().containerId.value.replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(10, 11));
   protected readonly hasImage = computed(() => this.previewUrl() !== null);
   protected readonly detectedMarkings = computed(() => {
     const text = this.rawText().join('\n').toUpperCase();
@@ -143,7 +145,8 @@ export class App {
     if (!file) {
       return;
     }
-    if (!file.type.startsWith('image/')) {
+    const imageExtension = /\.(avif|bmp|gif|jpe?g|png|webp)$/i.test(file.name);
+    if (!file.type.startsWith('image/') && !imageExtension) {
       this.addDiagnostic('File selection', 'Please select an image file.', `Received ${file.type || 'an unknown file type'}.`);
       input.value = '';
       return;
@@ -592,6 +595,15 @@ export class App {
     this.clearCheckDigitPreview();
   }
 
+  protected updateInferredContainerIdStem(value: string): void {
+    const digit = this.inferredContainerIdDigit();
+    this.updateField('containerId', `${value}${digit}`);
+  }
+
+  protected updateInferredContainerIdDigit(value: string): void {
+    this.updateField('containerId', `${this.fields().containerId.value.slice(0, 10)}${value.slice(-1)}`);
+  }
+
   private async loadSavedRecords(): Promise<void> {
     try {
       const database = await this.openSavedRecordsDatabase();
@@ -936,13 +948,14 @@ export class App {
       .filter((item): item is { digit: string; confidence: number } => Boolean(item.digit))
       .sort((first, second) => second.confidence - first.confidence);
     const candidate = candidates.find((item) => this.validateContainerId(stem + item.digit));
-    const recoveredDigit = candidate?.digit ?? (candidates.length ? this.containerIdCheckDigit(stem) : null);
+    const inferred = !candidate;
+    const recoveredDigit = candidate?.digit ?? this.containerIdCheckDigit(stem);
     if (!recoveredDigit) return;
-    const recoveredConfidence = candidate?.confidence ?? candidates[0].confidence;
+    const recoveredConfidence = candidate?.confidence ?? this.containerIdConfidence(lines, stem) ?? 0;
     if (this.validateContainerId(current.value) && recoveredConfidence < (current.confidence ?? 0)) return;
     this.fields.update((fields) => ({
       ...fields,
-      containerId: { ...fields.containerId, value: stem + recoveredDigit, confidence: recoveredConfidence },
+      containerId: { ...fields.containerId, value: stem + recoveredDigit, confidence: recoveredConfidence, inferred },
     }));
   }
 

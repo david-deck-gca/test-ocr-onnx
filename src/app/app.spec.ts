@@ -255,6 +255,26 @@ describe('App', () => {
     expect((fixture.nativeElement as HTMLElement).querySelector('.container-id td:nth-child(3) span')?.textContent).toBe('⚠');
   });
 
+  it('should render an inferred check digit in red with a warning', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      analysisSuccessful: { set(value: boolean): void };
+      fields: { update(updater: (fields: Record<string, { value: string; inferred?: boolean }>) => Record<string, { value: string; inferred?: boolean }>): void };
+    };
+    app.analysisSuccessful.set(true);
+    app.fields.update((fields) => ({
+      ...fields,
+      containerId: { ...fields['containerId'], value: 'EUXU7007569', inferred: true },
+    }));
+    fixture.detectChanges();
+
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector<HTMLInputElement>('.inferred-check-digit')?.value).toBe('9');
+    expect(element.querySelector('.inferred-check-digit')?.classList.contains('inferred-check-digit')).toBe(true);
+    expect(element.querySelector('.container-id td:nth-child(3) span')?.textContent).toBe('⚠');
+    expect(element.querySelector('.container-id td:nth-child(3) span')?.getAttribute('aria-label')).toBe('ISO 6346 check digit inferred');
+  });
+
   it('should leave the ISO code unit column empty', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -1545,6 +1565,19 @@ describe('App', () => {
 
     app.applyCheckDigitCandidate([stem], [{ text: '8', mean: 0.99 }]);
     expect(app.fields()['containerId'].value).toBe('HCSU7997909');
+  });
+
+  it('should infer the checksum when targeted OCR finds no digit', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      fields: { (): Record<string, { value: string; inferred?: boolean }>; update(updater: (fields: Record<string, { value: string; inferred?: boolean }>) => Record<string, { value: string; inferred?: boolean }>): void };
+      applyCheckDigitCandidate(lines: Array<{ text: string; mean: number }>, detected: Array<{ text: string; mean: number }>): void;
+    };
+    const stem = { text: 'EUXU 700756', mean: 0.95, box: [[100, 100], [300, 100], [300, 130], [100, 130]] };
+
+    app.applyCheckDigitCandidate([stem], []);
+
+    expect(app.fields()['containerId']).toMatchObject({ value: 'EUXU7007569', inferred: true });
   });
 
   it('should treat any completed OCR pass with a valid ID as sufficient', () => {
