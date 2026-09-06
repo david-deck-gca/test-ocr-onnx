@@ -2,7 +2,7 @@ import { Component, ElementRef, Injector, afterNextRender, computed, inject, sig
 import { OcrService } from './ocr.service';
 
 type CaptureMode = 'auto-crop' | 'manual-crop';
-type FieldKey = 'maxWorkingPressureBar' | 'maxWorkingPressurePsi' | 'containerId' | 'isoCode' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters' | 'capacityUsGallons' | 'capacityCubicMeters' | 'capacityCubicFeet';
+type FieldKey = 'maxWorkingPressureBar' | 'maxWorkingPressurePsi' | 'containerId' | 'isoCode' | 'approvalCode' | 'applicableRegulations' | 'tankCode' | 'kemlerCode' | 'unNumber' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters' | 'capacityUsGallons' | 'capacityCubicMeters' | 'capacityCubicFeet';
 type OcrLine = { text: string; mean: number; box?: number[][] };
 type UnwarpGeometry = { rotation: number; curvature: number; reliable: boolean };
 type CropRect = { x: number; y: number; width: number; height: number };
@@ -30,7 +30,7 @@ const THUMBNAIL_MAX_DIMENSION = 160;
 const THUMBNAIL_JPEG_QUALITY = 0.8;
 
 function defaultCaptureMode(): CaptureMode {
-  return 'manual-crop';
+  return 'auto-crop';
 }
 
 interface ContainerField {
@@ -83,6 +83,11 @@ export class App {
     maxWorkingPressurePsi: { value: '', unit: 'PSI' },
     containerId: { value: '' },
     isoCode: { value: '' },
+    approvalCode: { value: '' },
+    applicableRegulations: { value: '' },
+    tankCode: { value: '' },
+    kemlerCode: { value: '' },
+    unNumber: { value: '' },
     mpgmKg: { value: '', unit: 'KG' },
     mpgmLb: { value: '', unit: 'LB' },
     tareKg: { value: '', unit: 'KG' },
@@ -95,7 +100,10 @@ export class App {
     capacityCubicFeet: { value: '', unit: 'CU.FT.' },
   });
   protected readonly containerIdValid = computed(() => this.validateContainerId(this.fields().containerId.value));
+  protected readonly containerIdPartial = computed(() => /^[A-Z]{3}[UJZ]\d{6}$/.test(this.fields().containerId.value));
   protected readonly formattedContainerId = computed(() => this.formatContainerId(this.fields().containerId.value));
+  protected readonly formattedContainerIdStem = computed(() => this.formatContainerId(this.fields().containerId.value.slice(0, 10)));
+  protected readonly inferredContainerIdDigit = computed(() => this.fields().containerId.value.replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(10, 11));
   protected readonly hasImage = computed(() => this.previewUrl() !== null);
   protected readonly detectedMarkings = computed(() => {
     const text = this.rawText().join('\n').toUpperCase();
@@ -109,9 +117,11 @@ export class App {
   });
   protected readonly detectedWeightLabels = computed(() => {
     const markings = this.detectedMarkings();
+    const text = this.rawText().join('\n').toUpperCase();
+    const unTankGross = /\bUN\s*TANK\b/.test(text) && Boolean(this.fields().mpgmKg.value);
     return {
-      gross: markings.mpgm ? 'MPGM' : markings.mgw ? 'MGW' : markings.maxGr ? 'MAX.GR.' : '',
-      payload: markings.payload ? 'PAYLOAD' : markings.net ? 'NET' : '',
+      gross: markings.mpgm ? 'MPGM' : markings.mgw ? 'MGW' : markings.maxGr || unTankGross ? 'MAX.GR.' : '',
+      payload: markings.payload ? 'PAYLOAD' : markings.net || this.fields().payloadKg.value ? 'NET' : '',
     };
   });
 
@@ -135,7 +145,8 @@ export class App {
     if (!file) {
       return;
     }
-    if (!file.type.startsWith('image/')) {
+    const imageExtension = /\.(avif|bmp|gif|jpe?g|png|webp)$/i.test(file.name);
+    if (!file.type.startsWith('image/') && !imageExtension) {
       this.addDiagnostic('File selection', 'Please select an image file.', `Received ${file.type || 'an unknown file type'}.`);
       input.value = '';
       return;
@@ -373,7 +384,7 @@ export class App {
       }
       if (suggestedCrop) {
         this.cropDraft.set(suggestedCrop);
-        this.status.set('OCR complete. Review the suggested region around the container ID and markings beneath it.');
+        this.status.set('OCR complete. Review the suggested region around the container ID and the aligned markings above and below it.');
       } else {
         this.status.set(`OCR complete. Found ${lines.length} text region${lines.length === 1 ? '' : 's'}. Review the fields before saving.`);
       }
@@ -539,7 +550,6 @@ export class App {
     this.previewRetries = 0;
     this.sourceName.set(name);
     this.applyingCrop.set(false);
-    this.captureMode.set('manual-crop');
     this.cropRect.set(null);
     this.cropDraft.set(DEFAULT_CROP);
     this.unwarpSelectedRegion.set(false);
@@ -563,6 +573,11 @@ export class App {
       maxWorkingPressurePsi: { value: '', unit: 'PSI' },
       containerId: { value: '' },
       isoCode: { value: '' },
+      approvalCode: { value: '' },
+      applicableRegulations: { value: '' },
+      tankCode: { value: '' },
+      kemlerCode: { value: '' },
+      unNumber: { value: '' },
       mpgmKg: { value: '', unit: 'KG' },
       mpgmLb: { value: '', unit: 'LB' },
       tareKg: { value: '', unit: 'KG' },
@@ -578,6 +593,15 @@ export class App {
     this.rawScans.set([]);
     this.selectedOcrLines.set([]);
     this.clearCheckDigitPreview();
+  }
+
+  protected updateInferredContainerIdStem(value: string): void {
+    const digit = this.inferredContainerIdDigit();
+    this.updateField('containerId', `${value}${digit}`);
+  }
+
+  protected updateInferredContainerIdDigit(value: string): void {
+    this.updateField('containerId', `${this.fields().containerId.value.slice(0, 10)}${value.slice(-1)}`);
   }
 
   private async loadSavedRecords(): Promise<void> {
@@ -619,6 +643,7 @@ export class App {
       if (selection !== this.imageSelection) return;
 
       let lines: OcrLine[];
+      const scanStartedAt = performance.now();
       try {
         lines = await this.scanAutoCrop(preview, MAX_FULL_PHOTO_PIXELS);
       } catch (error: unknown) {
@@ -629,16 +654,71 @@ export class App {
           throw new Error(`Normal-size auto crop failed: ${this.errorMessage(error)}. Reduced auto crop failed: ${this.errorMessage(fallbackError)}`);
         }
       }
-      const containerId = this.extractFields(lines).containerId.value;
-      const suggestedCrop = await this.createSuggestedCrop(lines, containerId, image, {
-        width: preview.naturalWidth,
-        height: preview.naturalHeight,
-      });
-      if (selection !== this.imageSelection || this.cropRect()) return;
+      this.rawText.set(lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`));
+      this.rawScans.set([{
+        label: 'Full photo',
+        lines: lines.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
+        durationMs: Math.round(performance.now() - scanStartedAt),
+      }]);
+       let fields = this.extractFields(lines);
+        const containerId = fields.containerId.value;
+        const partialContainerId = /^[A-Z]{3}[UJZ]\d{6}$/.test(containerId)
+          ? containerId
+          : containerId ? '' : this.findContainerIdAnchor(lines);
+      if (partialContainerId) {
+        fields.containerId = { value: partialContainerId, confidence: this.containerIdConfidence(lines, partialContainerId) };
+      }
+      this.fields.set(fields);
+      this.analysisSuccessful.set(Boolean(containerId || partialContainerId));
+       let suggestedCrop = await this.createSuggestedCrop(lines, containerId || partialContainerId, image, {
+         width: preview.naturalWidth,
+         height: preview.naturalHeight,
+       });
+       let automaticRetryReason = '';
+        if (suggestedCrop && (this.hasLowConfidence(fields) || Boolean(partialContainerId))) {
+          try {
+            const retryStartedAt = performance.now();
+            automaticRetryReason = partialContainerId && !this.hasLowConfidence(fields)
+              ? 'the container ID was incomplete'
+              : this.lowConfidenceSummary(fields);
+           this.status.set(`Low confidence detected in ${automaticRetryReason}. Retrying the automatic crop at 2x to improve recognition...`);
+           const retryLines = await this.scanCropRegion(image, suggestedCrop, 2, MAX_MANUAL_RETRY_CROP_PIXELS, { retried: false });
+           this.rawScans.update((scans) => [...scans, {
+             label: '2x automatic crop',
+             lines: retryLines.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
+             durationMs: Math.round(performance.now() - retryStartedAt),
+           }]);
+           lines = this.selectBestOcrLines([lines, retryLines]);
+           this.rawText.set(lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`));
+           fields = this.mergeFieldsByConfidence(fields, this.extractFields(retryLines));
+           this.fields.set(fields);
+            suggestedCrop = await this.createSuggestedCrop(lines, fields.containerId.value || partialContainerId, image, {
+              width: preview.naturalWidth,
+              height: preview.naturalHeight,
+            });
+            if (partialContainerId && !this.validateContainerId(fields.containerId.value) && suggestedCrop) {
+              this.fields.set(fields);
+              this.selectedOcrLines.set(lines);
+              await this.runCheckDigitScan(suggestedCrop, lines);
+              fields = this.fields();
+            }
+          } catch (error: unknown) {
+           this.addDiagnostic('Automatic crop retry', 'The enlarged automatic crop could not be scanned.', this.errorMessage(error));
+         }
+       }
+       if (selection !== this.imageSelection || this.cropRect()) return;
       const duration = ` (${Math.round(performance.now() - startedAt)} ms)`;
-      if (suggestedCrop) {
-        this.cropDraft.set(suggestedCrop);
-        this.status.set(`Container ID located. Review the suggested crop around it and the markings below.${duration}`);
+       if (suggestedCrop) {
+         this.cropDraft.set(suggestedCrop);
+         const retryStatus = automaticRetryReason ? ` Automatic 2x scan completed because ${automaticRetryReason} was below 85%.` : '';
+           const completeContainerId = this.validateContainerId(fields.containerId.value);
+           this.status.set(completeContainerId
+             ? `Container ID located${duration}: ${this.formatContainerId(fields.containerId.value)}${retryStatus}\n`
+             : partialContainerId
+               ? `Partial container ID located: ${this.formatContainerId(partialContainerId)}${retryStatus}`
+               : `Container ID located${duration}.${retryStatus}\n`);
+      } else if (partialContainerId) {
+        this.status.set(`Partial container ID located: ${this.formatContainerId(partialContainerId)}`);
       } else {
         this.status.set(`Container ID was not located. Draw a crop around the ID and markings you want to scan.${duration}`);
       }
@@ -715,6 +795,18 @@ export class App {
     return error instanceof Error ? error.message : String(error);
   }
 
+  private async scanCropRegion(image: Blob, crop: CropRect, scale: number, maximumPixels: number, recovery: { retried: boolean }): Promise<OcrLine[]> {
+    const pass = await this.createCropPass(image, crop, scale, undefined, maximumPixels);
+    try {
+      return this.deduplicateLines((await this.detectWithRecovery(pass.url, recovery)).map((line) => ({
+        ...line,
+        box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
+      })));
+    } finally {
+      if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
+    }
+  }
+
   private ocrFailureMessage(error: unknown): string {
     const message = this.errorMessage(error).toLowerCase();
     if (error instanceof RangeError || /memory|allocate|canvas|bitmap|decoded image|webgl/i.test(message)) {
@@ -729,9 +821,9 @@ export class App {
     const definitions = manualCrop
       ? [
         { label: 'Original size', crop: manualCrop, scale: 1, maximumPixels: MAX_MANUAL_CROP_PIXELS, unwarp: false, rotation: 0, curvature: 0 },
-        { label: shouldUnwarp ? 'Unwarped' : 'Enlarged', crop: manualCrop, scale: shouldUnwarp ? 1 : 2, maximumPixels: MAX_MANUAL_RETRY_CROP_PIXELS, unwarp: shouldUnwarp, rotation: this.unwarpRotation(), curvature: shouldUnwarp ? DEFAULT_AUTO_CURVATURE : 0 },
-        ...(shouldUnwarp ? [{ label: '2x unwarped', crop: manualCrop, scale: 2, maximumPixels: MAX_MANUAL_RETRY_CROP_PIXELS, unwarp: true, rotation: this.unwarpRotation(), curvature: DEFAULT_AUTO_CURVATURE }] : []),
-      ]
+         { label: shouldUnwarp ? 'Unwarped' : 'Enlarged', crop: manualCrop, scale: shouldUnwarp ? 1 : 2, maximumPixels: MAX_MANUAL_RETRY_CROP_PIXELS, unwarp: shouldUnwarp, rotation: this.unwarpRotation(), curvature: shouldUnwarp ? DEFAULT_AUTO_CURVATURE : 0 },
+         ...(shouldUnwarp ? [{ label: '2x unwarped', crop: manualCrop, scale: 2, maximumPixels: MAX_MANUAL_RETRY_CROP_PIXELS, unwarp: true, rotation: this.unwarpRotation(), curvature: DEFAULT_AUTO_CURVATURE }] : []),
+       ]
       : [{ label: 'Full photo', crop: DEFAULT_CROP, scale: 1, maximumPixels: MAX_FULL_PHOTO_PIXELS, unwarp: false, rotation: 0, curvature: 0 }];
     const scanResults: OcrLine[][] = [];
 
@@ -755,16 +847,21 @@ export class App {
         const scan = detected.map((line) => ({
           ...line,
           box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
-        }));
-        scanResults.push(scan);
-        const lines = this.deduplicateLines(scanResults.flat());
-        this.rawText.set(lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`));
-        this.rawScans.update((scans) => [...scans, {
+         }));
+         scanResults.push(scan);
+         const lines = this.deduplicateLines(scanResults.flat());
+         this.rawText.set(lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`));
+         this.rawScans.update((scans) => [...scans, {
           label: definition.label === 'Enlarged' ? `${pass.scale.toFixed(1)}x enlarged` : definition.label,
-          lines: scan.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
-          durationMs: Math.round(performance.now() - startedAt),
-        }]);
-      } finally {
+           lines: scan.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
+           durationMs: Math.round(performance.now() - startedAt),
+         }]);
+         if (manualCrop && !shouldUnwarp && index === 0) {
+           if (!this.hasLowConfidence(this.extractFields(scan))) {
+             break;
+           }
+         }
+       } finally {
         if (pass.revokeUrl && !retainPass) URL.revokeObjectURL(pass.url);
       }
     }
@@ -798,16 +895,15 @@ export class App {
     this.unwarpedCropUrl.set(null);
   }
 
-  private async runCheckDigitScan(): Promise<void> {
+  private async runCheckDigitScan(crop = this.cropRect(), lines = this.selectedOcrLines()): Promise<void> {
     const image = this.imageBlob();
-    const lines = this.selectedOcrLines();
-    if (!image || !this.cropRect()) return;
+    if (!image || !crop) return;
     const imageSize = this.previewImage()?.nativeElement;
     if (!imageSize?.naturalWidth || !imageSize.naturalHeight) {
       this.addDiagnostic('Check digit OCR', 'The source image dimensions are not available yet.');
       return;
     }
-    const region = this.checkDigitRegion(lines, imageSize.naturalWidth, imageSize.naturalHeight);
+    const region = this.checkDigitRegion(lines, imageSize.naturalWidth, imageSize.naturalHeight, crop);
     if (!region) {
       this.addDiagnostic('Check digit OCR', 'The first 10 container-ID characters could not define a check-digit region.');
       return;
@@ -844,18 +940,22 @@ export class App {
     const stem = this.findCheckDigitStem(lines);
     if (!stem) return;
     const current = this.fields().containerId;
-    const candidate = detected
+    const candidates = detected
       .map((line) => {
         const digits = line.text.match(/\d/g) ?? [];
         return { digit: digits.length === 1 ? digits[0] : undefined, confidence: line.mean };
       })
       .filter((item): item is { digit: string; confidence: number } => Boolean(item.digit))
-      .sort((first, second) => second.confidence - first.confidence)
-      .find((item) => this.validateContainerId(stem + item.digit));
-    if (!candidate || (this.validateContainerId(current.value) && candidate.confidence < (current.confidence ?? 0))) return;
+      .sort((first, second) => second.confidence - first.confidence);
+    const candidate = candidates.find((item) => this.validateContainerId(stem + item.digit));
+    const inferred = !candidate;
+    const recoveredDigit = candidate?.digit ?? this.containerIdCheckDigit(stem);
+    if (!recoveredDigit) return;
+    const recoveredConfidence = candidate?.confidence ?? this.containerIdConfidence(lines, stem) ?? 0;
+    if (this.validateContainerId(current.value) && recoveredConfidence < (current.confidence ?? 0)) return;
     this.fields.update((fields) => ({
       ...fields,
-      containerId: { ...fields.containerId, value: stem + candidate.digit, confidence: candidate.confidence },
+      containerId: { ...fields.containerId, value: stem + recoveredDigit, confidence: recoveredConfidence, inferred },
     }));
   }
 
@@ -869,14 +969,13 @@ export class App {
     return this.findContainerIdAnchor(lines);
   }
 
-  private checkDigitRegion(lines: OcrLine[], imageWidth: number, imageHeight: number): CropRect | null {
+  private checkDigitRegion(lines: OcrLine[], imageWidth: number, imageHeight: number, crop = this.cropRect()): CropRect | null {
     const stem = this.findCheckDigitStem(lines);
     if (!stem) return null;
     const stemLines = this.linesForCheckDigitStem(lines, stem);
     const idBounds = this.combineBounds(stemLines
       .map((line) => this.boxBounds(line.box))
       .filter((bounds): bounds is BoxBounds => Boolean(bounds)));
-    const crop = this.cropRect();
     if (!idBounds || !crop) return null;
     const cropBounds = {
       left: crop.x * imageWidth,
@@ -958,6 +1057,41 @@ export class App {
       .sort((first, second) => this.ocrResultScore(second) - this.ocrResultScore(first))[0] ?? [];
   }
 
+  private mergeFieldsByConfidence(original: Record<FieldKey, ContainerField>, retry: Record<FieldKey, ContainerField>): Record<FieldKey, ContainerField> {
+    const merged = { ...original };
+    for (const key of Object.keys(original) as FieldKey[]) {
+      const candidate = retry[key];
+      const current = original[key];
+      if (candidate?.value && (!current.value || (candidate.confidence ?? 0) > (current.confidence ?? 0))) {
+        merged[key] = { ...current, ...candidate };
+      }
+    }
+    return merged;
+  }
+
+  private lowConfidenceSummary(fields: Record<string, ContainerField>): string {
+    const labels: Record<string, string> = {
+      mpgmKg: 'MGW',
+      mpgmLb: 'MGW',
+      tareKg: 'TARE',
+      tareLb: 'TARE',
+      payloadKg: 'PAYLOAD',
+      payloadLb: 'PAYLOAD',
+      capacityLiters: 'CAPACITY',
+      capacityUsGallons: 'CAPACITY',
+      capacityCubicMeters: 'CAPACITY',
+      capacityCubicFeet: 'CAPACITY',
+    };
+    return Object.entries(fields)
+      .filter(([, field]) => field.value && field.confidence !== undefined && field.confidence < 0.85)
+      .map(([key, field]) => `${labels[key] ?? key} ${Math.round((field.confidence ?? 0) * 100)}%`)
+      .join(', ');
+  }
+
+  private hasLowConfidence(fields: Record<string, ContainerField>): boolean {
+    return Object.values(fields).some((field) => field.value && field.confidence !== undefined && field.confidence < 0.85);
+  }
+
   private ocrResultScore(lines: OcrLine[]): number {
     const fields = this.extractFields(lines);
     const detectedFields = Object.values(fields).filter((field) => field.value).length;
@@ -1012,9 +1146,11 @@ export class App {
     const height = sourceSize?.height ?? decodedImage!.height;
     try {
       const padding = Math.max(24, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.08);
-      const left = Math.max(0, markingsBounds.left - padding);
+      const leftPadding = Math.max(48, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.12);
+      const rightPadding = Math.max(48, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.07);
+      const left = Math.max(0, markingsBounds.left - leftPadding);
       const top = Math.max(0, markingsBounds.top - padding);
-      const right = Math.min(width, markingsBounds.right + padding);
+      const right = Math.min(width, markingsBounds.right + rightPadding);
       const bottom = Math.min(height, markingsBounds.bottom + padding);
       return {
         x: left / width,
@@ -1035,18 +1171,18 @@ export class App {
     const idBounds = this.combineBounds(idLines.map((line) => this.boxBounds(line.box)).filter((bounds): bounds is BoxBounds => Boolean(bounds)));
     if (!idBounds) return null;
 
-    const idWidth = idBounds.right - idBounds.left;
     const idHeight = idBounds.bottom - idBounds.top;
-    const horizontalAllowance = Math.max(idWidth * 1.5, idHeight * 8);
     const relevantBounds = lines
       .map((line) => this.boxBounds(line.box))
       .filter((bounds): bounds is BoxBounds => Boolean(bounds))
-      .filter((bounds) => bounds.bottom >= idBounds.top - idHeight
-        && bounds.right >= idBounds.left - horizontalAllowance
-        && bounds.left <= idBounds.right + horizontalAllowance);
+      .filter((bounds) => bounds.bottom <= idBounds.top || bounds.top >= idBounds.bottom)
+      .filter((bounds) => bounds.right >= idBounds.left && bounds.left <= idBounds.right);
     const markingsBounds = this.combineBounds([idBounds, ...relevantBounds]);
-    if (!markingsBounds || !isIncompleteIdAnchor) return markingsBounds;
-    return { ...markingsBounds, right: markingsBounds.right + idWidth / 10 };
+    if (!markingsBounds) return null;
+    const right = isIncompleteIdAnchor
+      ? idBounds.right + (idBounds.right - idBounds.left) / 10
+      : idBounds.right;
+    return { left: idBounds.left, top: markingsBounds.top, right, bottom: markingsBounds.bottom };
   }
 
   private findContainerIdAnchor(lines: OcrLine[]): string {
@@ -1057,16 +1193,35 @@ export class App {
         text: line.text.replace(/[^A-Z0-9]/gi, '').toUpperCase(),
         bounds: this.boxBounds(line.box),
       }))
-      .filter((fragment) => fragment.text && fragment.bounds)
+      .filter((fragment) => fragment.text && fragment.bounds && this.isLikelySingleOcrRow(fragment.line, lines))
       .sort((first, second) => first.bounds!.top - second.bounds!.top || first.bounds!.left - second.bounds!.left);
+    let partialAnchor = '';
     for (let start = 0; start < fragments.length; start++) {
       for (let length = 1; length <= 3 && start + length <= fragments.length; length++) {
-        const candidate = fragments.slice(start, start + length).map((fragment) => fragment.text).join('');
-        const anchor = candidate.match(/[A-Z]{3}[UJZ]\d{6}/)?.[0];
-        if (anchor) return anchor;
+        const candidateFragments = fragments.slice(start, start + length);
+        if (!candidateFragments.every((fragment) => this.sameOcrRow(candidateFragments[0], fragment))) continue;
+        const candidate = candidateFragments.map((fragment) => fragment.text).join('');
+        const compactCandidate = candidate.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+        const candidatePattern = candidateFragments.length === 1
+          ? /[A-Z]{3}[UJZ]\d{7}/g
+          : /^[A-Z]{3}[UJZ]\d{7}$/;
+        const fullMatch = compactCandidate.match(candidatePattern)?.find((value) => this.validateContainerId(value));
+        if (fullMatch) return fullMatch.slice(0, 10);
+        const partialPattern = candidateFragments.length === 1
+          ? /[A-Z]{3}[UJZ]\d{6}/
+          : /^[A-Z]{3}[UJZ]\d{6}$/;
+        const partialMatch = compactCandidate.match(partialPattern)?.[0];
+        if (partialMatch && !partialAnchor) partialAnchor = partialMatch;
       }
     }
-    return '';
+    return partialAnchor;
+  }
+
+  private containerIdConfidence(lines: OcrLine[], containerId: string): number | undefined {
+    const normalizedId = containerId.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    return lines
+      .filter((line) => line.text.replace(/[^A-Z0-9]/gi, '').toUpperCase().includes(normalizedId))
+      .sort((first, second) => second.mean - first.mean)[0]?.mean;
   }
 
   private linesForContainerId(lines: OcrLine[], containerId: string): OcrLine[] {
@@ -1083,8 +1238,9 @@ export class App {
     for (let start = 0; start < fragments.length; start++) {
       for (let length = 1; length <= 3 && start + length <= fragments.length; length++) {
         const candidate = fragments.slice(start, start + length);
+        if (!candidate.every((fragment) => this.sameOcrRow(candidate[0], fragment))) continue;
         if (candidate.map((fragment) => fragment.text).join('').includes(normalizedId)) {
-          return candidate.map((fragment) => fragment.line);
+          return candidate.map((fragment) => this.narrowLineToContainerId(fragment.line, normalizedId));
         }
       }
     }
@@ -1170,6 +1326,42 @@ export class App {
       canvas.width = 0;
       canvas.height = 0;
     }
+  }
+
+  private narrowLineToContainerId(line: OcrLine, containerId: string): OcrLine {
+    const source = line.text.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    const target = containerId.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    const start = source.indexOf(target);
+    const bounds = this.boxBounds(line.box);
+    if (start < 0 || !bounds || !source.length) return line;
+    const left = bounds.left + (bounds.right - bounds.left) * start / source.length;
+    const right = bounds.left + (bounds.right - bounds.left) * (start + target.length) / source.length;
+    return {
+      ...line,
+      box: [[left, bounds.top], [right, bounds.top], [right, bounds.bottom], [left, bounds.bottom]],
+    };
+  }
+
+  private isLikelySingleOcrRow(line: OcrLine, lines: OcrLine[]): boolean {
+    const bounds = this.boxBounds(line.box);
+    if (!bounds) return false;
+    const heights = lines
+      .map((candidate) => this.boxBounds(candidate.box))
+      .filter((candidate): candidate is BoxBounds => Boolean(candidate))
+      .map((candidate) => candidate.bottom - candidate.top)
+      .sort((first, second) => first - second);
+    if (!heights.length) return true;
+    const medianHeight = heights[Math.floor((heights.length - 1) / 2)];
+    return bounds.bottom - bounds.top <= medianHeight * 1.75;
+  }
+
+  private sameOcrRow(first: { bounds: BoxBounds | null }, second: { bounds: BoxBounds | null }): boolean {
+    if (!first.bounds || !second.bounds) return false;
+    const firstHeight = first.bounds.bottom - first.bounds.top;
+    const secondHeight = second.bounds.bottom - second.bounds.top;
+    const firstCenter = (first.bounds.top + first.bounds.bottom) / 2;
+    const secondCenter = (second.bounds.top + second.bounds.bottom) / 2;
+    return Math.abs(firstCenter - secondCenter) <= Math.min(firstHeight, secondHeight) * 0.5;
   }
 
   private drawCylindricalUnwarp(context: CanvasRenderingContext2D, source: CanvasImageSource, sourceX: number, sourceY: number, sourceWidth: number, sourceHeight: number, baseWidth: number, baseHeight: number, outputWidth: number, outputHeight: number, rotation: number, curvature: number): void {
@@ -1308,6 +1500,13 @@ export class App {
         maxWorkingPressure: { bar: fields.maxWorkingPressureBar, psi: fields.maxWorkingPressurePsi },
         id: { ...fields.containerId, iso6346Valid: this.containerIdValid() },
         isoCode: fields.isoCode,
+        unTank: {
+          approvalCode: fields.approvalCode,
+          applicableRegulations: fields.applicableRegulations,
+          tankCode: fields.tankCode,
+          kemlerCode: fields.kemlerCode,
+          unNumber: fields.unNumber,
+        },
         mpgm: { kg: fields.mpgmKg, lb: fields.mpgmLb },
         tare: { kg: fields.tareKg, lb: fields.tareLb },
         payload: { kg: fields.payloadKg, lb: fields.payloadLb },
@@ -1361,6 +1560,8 @@ export class App {
     const fields: Record<FieldKey, ContainerField> = {
       maxWorkingPressureBar: { value: '', unit: 'BAR' }, maxWorkingPressurePsi: { value: '', unit: 'PSI' },
       containerId: { value: '' }, isoCode: { value: '' },
+      approvalCode: { value: '' }, applicableRegulations: { value: '' }, tankCode: { value: '' },
+      kemlerCode: { value: '' }, unNumber: { value: '' },
       mpgmKg: { value: '', unit: 'KG' }, mpgmLb: { value: '', unit: 'LB' },
       tareKg: { value: '', unit: 'KG' }, tareLb: { value: '', unit: 'LB' },
       payloadKg: { value: '', unit: 'KG' }, payloadLb: { value: '', unit: 'LB' },
@@ -1371,42 +1572,95 @@ export class App {
     };
     const text = lines.map((line) => ({ ...line, normalized: line.text.toUpperCase().replace(/[|]/g, 'I') }));
     const find = (pattern: RegExp) => text.find((line) => pattern.test(line.normalized));
-    const idLine = find(/[A-Z]{3}[UJZ][\s-]*\d{6}[\s-]*\d/);
-    if (idLine) {
-      const value = idLine.normalized.match(/[A-Z]{3}[UJZ][\s-]*\d{6}[\s-]*\d/)![0].replace(/[\s-]/g, '');
-      if (this.validateContainerId(value)) {
-        fields.containerId = { value, confidence: idLine.mean };
-      }
+    const idCandidates = text.flatMap((line) => {
+      const match = line.normalized.match(/\b([A-Z]{3}[UJZ])\s*((?:\d\s*){5}\d)\s*(\d)?\b/);
+      if (!match) return [];
+      const stem = `${match[1]}${match[2].replace(/\s/g, '')}`;
+      const checkDigit = match[3] ?? '';
+      return [{ line, stem, value: checkDigit ? `${stem}${checkDigit}` : '' }];
+    });
+    const validId = idCandidates.find((candidate) => candidate.value && this.validateContainerId(candidate.value));
+    if (validId) {
+      fields.containerId = { value: validId.value, confidence: validId.line.mean };
     } else {
       const idFragments = text
         .map((line, index) => ({
           ...line,
           index,
           fragment: line.normalized.replace(/[^A-Z0-9]/g, ''),
-          center: line.box?.reduce(([totalX, totalY], [x, y]) => [totalX + x, totalY + y], [0, 0]).map((total) => total / line.box!.length),
+          bounds: this.boxBounds(line.box),
         }))
-        .filter((line) => line.fragment)
-        .sort((first, second) => {
-          if (!first.center || !second.center) return first.index - second.index;
-          return first.center[1] - second.center[1] || first.center[0] - second.center[0];
-        });
+        .filter((line) => line.fragment && line.bounds)
+        .sort((first, second) => first.bounds!.top - second.bounds!.top || first.bounds!.left - second.bounds!.left);
+      const sameRow = (first: typeof idFragments[number], second: typeof idFragments[number]) => {
+        const firstBounds = first.bounds!;
+        const secondBounds = second.bounds!;
+        return this.sameOcrRow(first, second);
+      };
       for (let start = 0; start < idFragments.length && !fields.containerId.value; start++) {
         for (let length = 2; length <= 3 && start + length <= idFragments.length; length++) {
-          const candidate = idFragments.slice(start, start + length).map((line) => line.fragment).join('');
-          const recovered = candidate.match(/[A-Z]{3}[UJZ]\d{7}/)?.[0];
+          const candidate = idFragments.slice(start, start + length);
+          if (!candidate.every((line) => sameRow(candidate[0], line))) continue;
+          const compactCandidate = candidate.map((line) => line.fragment).join('').toUpperCase();
+          const recovered = compactCandidate.match(/^[A-Z]{3}[UJZ]\d{7}$/)?.[0];
           if (recovered && this.validateContainerId(recovered)) {
             fields.containerId = {
               value: recovered,
-              confidence: Math.min(...idFragments.slice(start, start + length).map((line) => line.mean)),
+              confidence: Math.min(...candidate.map((line) => line.mean)),
             };
             break;
           }
         }
       }
     }
-    const isoLine = find(/\b[0-9]{2}[A-Z][0-9A-Z]\b/);
+    const unTankIndex = text.findIndex((line) => /\bUN\s*TANK\b/.test(line.normalized));
+    const isoLine = unTankIndex < 0 ? find(/\b[0-9]{2}[A-Z][0-9A-Z]\b/) : undefined;
     if (isoLine) {
       fields.isoCode = { value: isoLine.normalized.match(/\b[0-9]{2}[A-Z][0-9A-Z]\b/)![0], confidence: isoLine.mean };
+    }
+
+    if (unTankIndex >= 0) {
+      const tankLine = text[unTankIndex];
+      const tankRemainder = tankLine.normalized.split(/\bUN\s*TANK\b/)[1]?.replace(/^\s*[:.-]?\s*/, '').trim() ?? '';
+      const approvalLine = text.find((line) => /\b[0-9A-Z]{2}\s*[A-Z]\s*[0-9]\b\s+.+$/.test(line.normalized));
+      const approvalMatch = approvalLine?.normalized.match(/\b([0-9A-Z]{2})\s*([A-Z])\s*([0-9])\b\s+(.+)$/);
+      const regulationsValue = approvalMatch?.[4].replace(/^APPLICABLE\s+REGULATIONS\s*:?-?\s*/i, '').trim() ?? '';
+      const tankCodeText = tankRemainder
+        .replace(approvalMatch?.[0] ?? '', '')
+        .trim();
+      const tankCode = tankCodeText.match(/^([0-9A-Z][0-9A-Z./-]*)/)?.[1];
+      if (approvalMatch && approvalLine) fields.approvalCode = { value: `${approvalMatch[1]}${approvalMatch[2]}${approvalMatch[3]}`, confidence: approvalLine.mean };
+      if (regulationsValue && approvalLine) fields.applicableRegulations = { value: regulationsValue, confidence: approvalLine.mean };
+      if (tankCode) fields.tankCode = { value: tankCode, confidence: tankLine.mean };
+
+      const followingLines = text.slice(unTankIndex + 1, unTankIndex + 6);
+      const parseTankWeight = (line: typeof text[number] | undefined) => {
+        const match = line?.normalized.match(/(\d[\d ,.]*?)\s*(KG|LBS?|IBS?|BS?)?\s*\/\s*(\d[\d ,.]*?)\s*(KG|LBS?|IBS?|BS?)?\s*$/);
+        if (!match) return undefined;
+        const firstUnit = match[2] === 'KG' ? 'KG' : match[2] ? 'LB' : undefined;
+        const secondUnit = match[4] === 'KG' ? 'KG' : match[4] ? 'LB' : undefined;
+        return {
+          kg: { value: match[1].trim(), inferred: firstUnit !== 'KG' },
+          lb: { value: match[3].trim(), inferred: secondUnit !== 'LB' },
+        };
+      };
+      const gross = parseTankWeight(followingLines[0]);
+      const tare = parseTankWeight(followingLines[1]);
+      const capacity = followingLines[2]?.normalized.match(/(\d[\d ,.]*?)\s*L\b[^\d]*(\d[\d ,.]*?)\s*(?:US\s*)?GAL\b/);
+      const setTankWeight = (pair: ReturnType<typeof parseTankWeight>, kgKey: 'mpgmKg' | 'tareKg', lbKey: 'mpgmLb' | 'tareLb', line: typeof text[number] | undefined) => {
+        if (!line) return;
+        if (!pair) return;
+        fields[kgKey] = { value: pair.kg.value, unit: 'KG', confidence: line.mean, inferred: pair.kg.inferred };
+        fields[lbKey] = { value: pair.lb.value, unit: 'LB', confidence: line.mean, inferred: pair.lb.inferred };
+      };
+      setTankWeight(gross, 'mpgmKg', 'mpgmLb', followingLines[0]);
+      setTankWeight(tare, 'tareKg', 'tareLb', followingLines[1]);
+      if (followingLines[2] && capacity) {
+        fields.capacityLiters = { value: capacity[1].trim(), unit: 'L', confidence: followingLines[2].mean };
+        fields.capacityUsGallons = { value: capacity[2].trim(), unit: 'US GAL', confidence: followingLines[2].mean };
+      }
+      if (followingLines[3]) fields.kemlerCode = { value: followingLines[3].normalized.trim(), confidence: followingLines[3].mean };
+      if (followingLines[4]) fields.unNumber = { value: followingLines[4].normalized.replace(/^UN\s*/, '').trim(), confidence: followingLines[4].mean };
     }
 
     const weightAfter = (label: RegExp, unit: 'KG' | 'LB') => {
@@ -1525,10 +1779,12 @@ export class App {
     const maxWorkingPressurePsi = pressureAfter(/MAX\s*WORKING\s*PRESSURE/, 'PSI');
     fields.maxWorkingPressureBar = { value: maxWorkingPressureBar?.value ?? '', unit: 'BAR', confidence: maxWorkingPressureBar?.confidence };
     fields.maxWorkingPressurePsi = { value: maxWorkingPressurePsi?.value ?? '', unit: 'PSI', confidence: maxWorkingPressurePsi?.confidence };
-    fields.mpgmKg = { value: mpgmKg?.value ?? '', unit: 'KG', confidence: mpgmKg?.confidence, inferred: mpgmKg?.inferred };
-    fields.mpgmLb = { value: mpgmLb?.value ?? '', unit: 'LB', confidence: mpgmLb?.confidence, inferred: mpgmLb?.inferred };
-    fields.tareKg = { value: tareKg?.value ?? '', unit: 'KG', confidence: tareKg?.confidence, inferred: tareKg?.inferred };
-    fields.tareLb = { value: tareLb?.value ?? '', unit: 'LB', confidence: tareLb?.confidence, inferred: tareLb?.inferred };
+    if (unTankIndex < 0) {
+      fields.mpgmKg = { value: mpgmKg?.value ?? '', unit: 'KG', confidence: mpgmKg?.confidence, inferred: mpgmKg?.inferred };
+      fields.mpgmLb = { value: mpgmLb?.value ?? '', unit: 'LB', confidence: mpgmLb?.confidence, inferred: mpgmLb?.inferred };
+      fields.tareKg = { value: tareKg?.value ?? '', unit: 'KG', confidence: tareKg?.confidence, inferred: tareKg?.inferred };
+      fields.tareLb = { value: tareLb?.value ?? '', unit: 'LB', confidence: tareLb?.confidence, inferred: tareLb?.inferred };
+    }
     fields.payloadKg = payloadKg
       ? { value: payloadKg.value, unit: 'KG', confidence: payloadKg.confidence, inferred: payloadKg.inferred }
       : { value: '', unit: 'KG' };
@@ -1536,8 +1792,10 @@ export class App {
       ? { value: payloadLb.value, unit: 'LB', confidence: payloadLb.confidence, inferred: payloadLb.inferred }
       : { value: '', unit: 'LB' };
     this.recoverMissingWeightRows(fields, text);
-    fields.capacityLiters = { value: capacityLiters?.value ?? '', unit: 'L', confidence: capacityLiters?.confidence };
-    fields.capacityUsGallons = { value: capacityUsGallons?.value ?? '', unit: 'US GAL', confidence: capacityUsGallons?.confidence };
+    if (unTankIndex < 0) {
+      fields.capacityLiters = { value: capacityLiters?.value ?? '', unit: 'L', confidence: capacityLiters?.confidence };
+      fields.capacityUsGallons = { value: capacityUsGallons?.value ?? '', unit: 'US GAL', confidence: capacityUsGallons?.confidence };
+    }
     fields.capacityCubicMeters = { value: capacityCubicMeters?.value ?? '', unit: 'CU.M.', confidence: capacityCubicMeters?.confidence };
     fields.capacityCubicFeet = { value: capacityCubicFeet?.value ?? '', unit: 'CU.FT.', confidence: capacityCubicFeet?.confidence };
     return fields;
@@ -1552,7 +1810,9 @@ export class App {
     if (!hasGrossLabel || hasTareLabel || hasPayloadLabel) {
       return;
     }
+    const grossIndex = lines.findIndex((line) => /\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT|\bMAX\.?\s*GR\.?/.test(line.normalized));
     const unlabeledRows = lines
+      .slice(grossIndex + 1)
       .filter((line) => !/\bMPGM\b|\bMGW\b|GROSS\s*WEIGHT|\bMAX\.?\s*GR\.?|\bTARE\b|\bPAY(?:LOAD|J?LAD|JLOAD)(?=\s|\d|$)|\bNET(?:\s*WEIGHT)?\b/.test(line.normalized))
       .map((line) => ({
         line,
@@ -1567,11 +1827,14 @@ export class App {
         fields[key] = { value: match[1].trim(), unit: 'KG', confidence: row.line.mean, inferred: true };
       }
     };
-    recover(unlabeledRows[0], 'tareKg', unlabeledRows[0]?.kg ?? null);
-    if (unlabeledRows[0]?.lb && !fields.tareLb.value) fields.tareLb = { value: unlabeledRows[0].lb[1].trim(), unit: 'LB', confidence: unlabeledRows[0].line.mean, inferred: true };
-    const payloadRow = unlabeledRows[1];
-    recover(payloadRow, 'payloadKg', payloadRow?.kg ?? null);
-    if (payloadRow?.lb && !fields.payloadLb.value) fields.payloadLb = { value: payloadRow.lb[1].trim(), unit: 'LB', confidence: payloadRow.line.mean, inferred: true };
+    const kgRows = unlabeledRows.filter((row) => row.kg);
+    const firstKgIndex = unlabeledRows.findIndex((row) => row.kg);
+    const firstKgHasLb = firstKgIndex >= 0 && Boolean(unlabeledRows[firstKgIndex].lb);
+    const lbRows = unlabeledRows.filter((row, index) => row.lb && (firstKgHasLb ? index >= firstKgIndex : index > firstKgIndex));
+    recover(kgRows[0], 'tareKg', kgRows[0]?.kg ?? null);
+    recover(kgRows[1], 'payloadKg', kgRows[1]?.kg ?? null);
+    if (lbRows[0]?.lb && !fields.tareLb.value) fields.tareLb = { value: lbRows[0].lb[1].trim(), unit: 'LB', confidence: lbRows[0].line.mean, inferred: true };
+    if (lbRows[1]?.lb && !fields.payloadLb.value) fields.payloadLb = { value: lbRows[1].lb[1].trim(), unit: 'LB', confidence: lbRows[1].line.mean, inferred: true };
   }
 
   private formatContainerId(value: string): string {
@@ -1581,11 +1844,24 @@ export class App {
       .join(' ');
   }
 
+  protected confidenceText(field: ContainerField): string {
+    return field.confidence === undefined ? '' : `${Math.round(field.confidence * 100)}%`;
+  }
+
+  protected isLowConfidence(field: ContainerField): boolean {
+    return field.confidence !== undefined && field.confidence < 0.85;
+  }
+
   private validateContainerId(value: string): boolean {
     const normalized = value.replace(/\s/g, '').toUpperCase();
-    if (!/^[A-Z]{3}[UJZ]\d{7}$/.test(normalized)) {
-      return false;
-    }
+    if (!/^[A-Z]{3}[UJZ]\d{7}$/.test(normalized)) return false;
+    const expectedCheckDigit = this.containerIdCheckDigit(normalized.slice(0, 10));
+    return expectedCheckDigit !== null && expectedCheckDigit === normalized[10];
+  }
+
+  private containerIdCheckDigit(stem: string): string | null {
+    const normalized = stem.replace(/\s/g, '').toUpperCase();
+    if (!/^[A-Z]{3}[UJZ]\d{6}$/.test(normalized)) return null;
     const weights = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512];
     const letterValue = (letter: string) => {
       let value = letter.charCodeAt(0) - 55;
@@ -1606,6 +1882,6 @@ export class App {
       return total + value * weights[index];
     }, 0);
     const checkDigit = (sum % 11) % 10;
-    return checkDigit === Number(normalized[10]);
+    return String(checkDigit);
   }
 }

@@ -424,11 +424,8 @@ video {
   text-transform: uppercase;
   width: 100%;
 }
-.valid {
+.valid{
   color: #a8d4b0;
-}
-.invalid {
-  color: #f2ad97;
 }
 .raw-text {
   border-top: 1px solid #36483c;
@@ -500,19 +497,19 @@ button {
     font-size: 0.8rem !important;
   }
 }
-.field-grid {
+.field-grid{
   border-collapse: collapse;
   display: table;
   table-layout: fixed;
   width: 100%;
 }
 .field-grid tbody th,
-.field-grid tbody td {
+.field-grid tbody td{
   padding: 3px 0;
   text-align: left;
   vertical-align: middle;
 }
-.field-grid tbody th {
+.field-grid tbody th{
   color: #b4c2b6;
   font-weight: 700;
   width: 7rem;
@@ -520,10 +517,19 @@ button {
 .field-grid tbody td:nth-child(2) {
   padding-right: 8px;
 }
-.field-grid tbody td:last-child {
+.unit,.confidence{
   color: #8cae91;
-  padding-left: 8px;
+  white-space: nowrap;
+}
+.invalid {
+  color: #f2ad97;
+}
+.confidence {
+  text-align: right !important;
   width: 3rem;
+}
+.unit {
+  width: 3.5rem;
 }
 .field-grid tbody td small {
   display: block;
@@ -537,12 +543,23 @@ button {
   text-align: right;
   width: 100%;
 }
+.inferred-container-id {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+}
+.inferred-container-id input:first-child {
+  min-width: 0;
+}
+.inferred-container-id .inferred-check-digit {
+  color: #f06b63;
+  font-weight: 700;
+  max-width: 2.3rem;
+  text-align: center;
+}
 @media (max-width: 760px) {
   .field-grid tbody th {
     width: 5.5rem;
-  }
-  .field-grid tbody td:last-child {
-    width: 3rem;
   }
 }
 .raw-text h3 {
