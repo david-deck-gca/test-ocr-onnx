@@ -74,6 +74,7 @@ export class App {
   protected readonly diagnostics = signal<Diagnostic[]>([]);
   protected readonly rawText = signal<string[]>([]);
   protected readonly rawScans = signal<RawScan[]>([]);
+  protected readonly rawScansCollapsed = signal(false);
   private readonly selectedOcrLines = signal<OcrLine[]>([]);
   protected readonly savedRecords = signal<SavedRecord[]>([]);
   protected readonly savedJson = signal<string | null>(null);
@@ -120,7 +121,7 @@ export class App {
     const text = this.rawText().join('\n').toUpperCase();
     const unTankGross = /\bUN\s*TANK\b/.test(text) && Boolean(this.fields().mpgmKg.value);
     return {
-      gross: markings.mpgm ? 'MPGM' : markings.mgw ? 'MGW' : markings.maxGr || unTankGross ? 'MAX.GR.' : '',
+       gross: unTankGross || markings.maxGr ? 'MAX.GR.' : markings.mpgm ? 'MPGM' : markings.mgw ? 'MGW' : '',
       payload: markings.payload ? 'PAYLOAD' : markings.net || this.fields().payloadKg.value ? 'NET' : '',
     };
   });
@@ -364,6 +365,7 @@ export class App {
       const recovery = { retried: false };
       this.rawText.set([]);
       this.rawScans.set([]);
+      this.rawScansCollapsed.set(false);
       const scanResults = await this.scanOcrPasses(image, recovery);
       const lines = this.selectBestOcrLines(scanResults);
       this.selectedOcrLines.set(lines);
@@ -558,6 +560,7 @@ export class App {
     this.selectedOcrLines.set([]);
     this.rawText.set([]);
     this.rawScans.set([]);
+    this.rawScansCollapsed.set(false);
     const selection = ++this.imageSelection;
     if (this.captureMode() === 'manual-crop') {
       this.status.set('Draw a crop around the ID and markings, then use the selected region to run OCR.');
@@ -591,6 +594,7 @@ export class App {
     });
     this.rawText.set([]);
     this.rawScans.set([]);
+    this.rawScansCollapsed.set(false);
     this.selectedOcrLines.set([]);
     this.clearCheckDigitPreview();
   }
@@ -675,14 +679,13 @@ export class App {
          height: preview.naturalHeight,
        });
        let automaticRetryReason = '';
-        if (suggestedCrop && (this.hasLowConfidence(fields) || Boolean(partialContainerId))) {
-          try {
-            const retryStartedAt = performance.now();
-            automaticRetryReason = partialContainerId && !this.hasLowConfidence(fields)
-              ? 'the container ID was incomplete'
-              : this.lowConfidenceSummary(fields);
-           this.status.set(`Low confidence detected in ${automaticRetryReason}. Retrying the automatic crop at 2x to improve recognition...`);
-           const retryLines = await this.scanCropRegion(image, suggestedCrop, 2, MAX_MANUAL_RETRY_CROP_PIXELS, { retried: false });
+       const shouldRetryAutomaticCrop = Boolean(suggestedCrop && this.hasLowConfidenceForAutomaticCrop(fields));
+         if (suggestedCrop && shouldRetryAutomaticCrop) {
+           try {
+             const retryStartedAt = performance.now();
+             automaticRetryReason = this.lowConfidenceSummary(fields);
+            this.status.set(`Low confidence detected in ${automaticRetryReason}. Retrying the automatic crop at 2x to improve recognition...`);
+            const retryLines = await this.scanCropRegion(image, suggestedCrop, 2, MAX_MANUAL_RETRY_CROP_PIXELS, { retried: false });
            this.rawScans.update((scans) => [...scans, {
              label: '2x automatic crop',
              lines: retryLines.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
@@ -691,21 +694,21 @@ export class App {
            lines = this.selectBestOcrLines([lines, retryLines]);
            this.rawText.set(lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`));
            fields = this.mergeFieldsByConfidence(fields, this.extractFields(retryLines));
-           this.fields.set(fields);
-            suggestedCrop = await this.createSuggestedCrop(lines, fields.containerId.value || partialContainerId, image, {
-              width: preview.naturalWidth,
-              height: preview.naturalHeight,
-            });
-            if (partialContainerId && !this.validateContainerId(fields.containerId.value) && suggestedCrop) {
-              this.fields.set(fields);
-              this.selectedOcrLines.set(lines);
-              await this.runCheckDigitScan(suggestedCrop, lines);
-              fields = this.fields();
-            }
-          } catch (error: unknown) {
-           this.addDiagnostic('Automatic crop retry', 'The enlarged automatic crop could not be scanned.', this.errorMessage(error));
-         }
-       }
+            this.fields.set(fields);
+             suggestedCrop = await this.createSuggestedCrop(lines, fields.containerId.value || partialContainerId, image, {
+               width: preview.naturalWidth,
+               height: preview.naturalHeight,
+             });
+           } catch (error: unknown) {
+            this.addDiagnostic('Automatic crop retry', 'The enlarged automatic crop could not be scanned.', this.errorMessage(error));
+          }
+        }
+        if (partialContainerId && !this.validateContainerId(fields.containerId.value) && suggestedCrop) {
+          this.fields.set(fields);
+          this.selectedOcrLines.set(lines);
+          await this.runCheckDigitScan(suggestedCrop, lines);
+          fields = this.fields();
+        }
        if (selection !== this.imageSelection || this.cropRect()) return;
       const duration = ` (${Math.round(performance.now() - startedAt)} ms)`;
        if (suggestedCrop) {
@@ -915,19 +918,46 @@ export class App {
     let pass: { url: string; revokeUrl: boolean } | null = null;
     try {
       this.status.set('Scanning the expected check-digit region...');
-       pass = await this.createCheckDigitPass(image, region);
+       pass = await this.createCheckDigitPass(image, region, 2);
       this.clearCheckDigitPreview();
       this.checkDigitPreviewUrl.set(pass.url);
       retainPass = true;
-      const detected = await this.detectWithRecovery(pass.url, { retried: false });
-      const scan = detected.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) }));
+       const detected = await this.detectWithRecovery(pass.url, { retried: false });
+       const approvalLine = detected.find((line) => /\b[0-9A-Z]{2}\s*[A-Z]\s*[0-9]\b\s+.+$/.test(line.text));
+       const approvalMatch = approvalLine?.text.match(/\b([0-9A-Z]{2})\s*([A-Z])\s*([0-9])\b/);
+       if (approvalLine && approvalMatch) {
+         const regulations = approvalLine.text.replace(approvalMatch[0], '').replace(/^\s*[-:.]?\s*/, '').trim();
+         this.fields.update((fields) => ({
+           ...fields,
+           approvalCode: { ...fields.approvalCode, value: `${approvalMatch[1]}${approvalMatch[2]}${approvalMatch[3]}`, confidence: approvalLine.mean },
+           ...(regulations ? { applicableRegulations: { ...fields.applicableRegulations, value: regulations, confidence: approvalLine.mean } } : {}),
+         }));
+       }
+       const scan = detected.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) }));
       this.rawScans.update((scans) => [...scans, {
          label: '2x container ID',
         lines: scan,
         durationMs: Math.round(performance.now() - startedAt),
       }]);
-      this.applyCheckDigitCandidate(lines, detected);
-      this.status.set('Check-digit scan complete.');
+       let directlyDetected = this.applyCheckDigitCandidate(lines, detected, false);
+       if (!directlyDetected) {
+         if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
+         retainPass = false;
+         pass = await this.createCheckDigitPass(image, this.checkDigitDigitRegion(region), 3);
+         this.clearCheckDigitPreview();
+         this.checkDigitPreviewUrl.set(pass.url);
+         retainPass = true;
+         const digitDetected = await this.detectWithRecovery(pass.url, { retried: false });
+         const digitScan = digitDetected.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) }));
+         this.rawScans.update((scans) => [...scans, {
+           label: '3x container ID check digit',
+           lines: digitScan,
+           durationMs: Math.round(performance.now() - startedAt),
+         }]);
+         directlyDetected = this.applyCheckDigitCandidate(lines, digitDetected, false);
+         if (!directlyDetected) this.applyCheckDigitCandidate(lines, digitDetected);
+       }
+       this.status.set('Check-digit scan complete.');
     } catch (error: unknown) {
       this.addDiagnostic('Check digit OCR', 'The targeted check-digit scan could not be completed.', this.errorMessage(error));
     } finally {
@@ -936,32 +966,38 @@ export class App {
     }
   }
 
-  private applyCheckDigitCandidate(lines: OcrLine[], detected: OcrLine[]): void {
-    const stem = this.findCheckDigitStem(lines);
-    if (!stem) return;
+  private applyCheckDigitCandidate(lines: OcrLine[], detected: OcrLine[], allowInference = true): boolean {
+     const stem = this.findCheckDigitStem(lines);
+     if (!stem) return false;
     const current = this.fields().containerId;
     const candidates = detected
       .map((line) => {
         const normalized = line.text.replace(/[^A-Z0-9]/gi, '').toUpperCase();
         const suffix = normalized.startsWith(stem) ? normalized.slice(stem.length) : '';
-        const digits = normalized.match(/\d/g) ?? [];
-        return {
-          digit: /^\d$/.test(suffix) ? suffix : digits.length === 1 ? digits[0] : undefined,
+         const digits = normalized.match(/\d/g) ?? [];
+         const stemTail = stem.slice(-3);
+         const tailSuffix = normalized.startsWith(stemTail) && normalized.length === stemTail.length + 1
+           ? normalized.slice(stemTail.length)
+           : '';
+         return {
+           digit: /^\d$/.test(suffix) ? suffix : /^\d$/.test(tailSuffix) ? tailSuffix : digits.length === 1 ? digits[0] : undefined,
           confidence: line.mean,
         };
       })
       .filter((item): item is { digit: string; confidence: number } => Boolean(item.digit))
       .sort((first, second) => second.confidence - first.confidence);
     const candidate = candidates.find((item) => this.validateContainerId(stem + item.digit));
-    const inferred = !candidate;
-    const recoveredDigit = candidate?.digit ?? this.containerIdCheckDigit(stem);
-    if (!recoveredDigit) return;
-    const recoveredConfidence = candidate?.confidence ?? this.containerIdConfidence(lines, stem) ?? 0;
-    if (this.validateContainerId(current.value) && recoveredConfidence < (current.confidence ?? 0)) return;
+     if (!candidate && !allowInference) return false;
+     const inferred = !candidate;
+     const recoveredDigit = candidate?.digit ?? this.containerIdCheckDigit(stem);
+     if (!recoveredDigit) return false;
+     const recoveredConfidence = candidate?.confidence ?? this.containerIdConfidence(lines, stem) ?? 0;
+     if (this.validateContainerId(current.value) && recoveredConfidence < (current.confidence ?? 0)) return false;
     this.fields.update((fields) => ({
-      ...fields,
-      containerId: { ...fields.containerId, value: stem + recoveredDigit, confidence: recoveredConfidence, inferred },
-    }));
+       ...fields,
+       containerId: { ...fields.containerId, value: stem + recoveredDigit, confidence: recoveredConfidence, inferred },
+     }));
+     return true;
   }
 
   private hasValidContainerId(results: OcrLine[][]): boolean {
@@ -993,15 +1029,25 @@ export class App {
     const normalizedAnchor = anchor?.text.replace(/[^A-Z0-9]/gi, '').toUpperCase();
     const anchorBounds = anchor ? this.boxBounds(anchor.box) : null;
      const stemRight = anchor && normalizedAnchor
-       ? anchorBounds!.left + (anchorBounds!.right - anchorBounds!.left) * ((normalizedAnchor.indexOf(stem) + stem.length) / normalizedAnchor.length)
-       : idBounds.right;
+        ? anchorBounds!.left + (anchorBounds!.right - anchorBounds!.left) * ((normalizedAnchor.indexOf(stem) + stem.length) / normalizedAnchor.length)
+        : idBounds.right;
      const characterWidth = Math.max(1, (stemRight - idBounds.left) / 10);
+     const verticalPadding = Math.max(4, idBounds.bottom - idBounds.top);
      const left = Math.max(cropBounds.left, idBounds.left - characterWidth * 0.5);
      const right = Math.min(cropBounds.right, stemRight + characterWidth * 2.8);
-    const top = Math.max(cropBounds.top, idBounds.top);
-    const bottom = Math.min(cropBounds.bottom, idBounds.bottom);
+     const top = Math.max(cropBounds.top, idBounds.top - verticalPadding);
+     const bottom = Math.min(cropBounds.bottom, idBounds.bottom + verticalPadding);
     if (right <= left || bottom <= top) return null;
-    return { x: left / imageWidth, y: top / imageHeight, width: (right - left) / imageWidth, height: (bottom - top) / imageHeight };
+     return { x: left / imageWidth, y: top / imageHeight, width: (right - left) / imageWidth, height: (bottom - top) / imageHeight };
+   }
+
+  private checkDigitDigitRegion(region: CropRect): CropRect {
+    const digitWidth = region.width * 0.35;
+    return {
+      ...region,
+      x: region.x + region.width - digitWidth,
+      width: digitWidth,
+    };
   }
 
   private linesForCheckDigitStem(lines: OcrLine[], stem: string): OcrLine[] {
@@ -1024,14 +1070,14 @@ export class App {
     return [];
   }
 
-  private async createCheckDigitPass(image: Blob, region: CropRect): Promise<{ url: string; revokeUrl: boolean }> {
+  private async createCheckDigitPass(image: Blob, region: CropRect, requestedScale = 2): Promise<{ url: string; revokeUrl: boolean }> {
     const decodedImage = await this.decodeImage(image);
     try {
       const sourceX = Math.round(region.x * decodedImage.width);
       const sourceY = Math.round(region.y * decodedImage.height);
       const sourceWidth = Math.max(1, Math.round(region.width * decodedImage.width));
       const sourceHeight = Math.max(1, Math.round(region.height * decodedImage.height));
-       const scale = this.cropOutputScale(sourceWidth, sourceHeight, 2, undefined, this.runtimeCropPixelBudget(MAX_CHECK_DIGIT_CROP_PIXELS));
+       const scale = this.cropOutputScale(sourceWidth, sourceHeight, requestedScale, undefined, this.runtimeCropPixelBudget(MAX_CHECK_DIGIT_CROP_PIXELS));
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(sourceWidth * scale));
       canvas.height = Math.max(1, Math.round(sourceHeight * scale));
@@ -1088,13 +1134,18 @@ export class App {
       capacityCubicFeet: 'CAPACITY',
     };
     return Object.entries(fields)
-      .filter(([, field]) => field.value && field.confidence !== undefined && field.confidence < 0.85)
+      .filter(([key, field]) => key !== 'containerId' && field.value && field.confidence !== undefined && field.confidence < 0.85)
       .map(([key, field]) => `${labels[key] ?? key} ${Math.round((field.confidence ?? 0) * 100)}%`)
       .join(', ');
   }
 
   private hasLowConfidence(fields: Record<string, ContainerField>): boolean {
     return Object.values(fields).some((field) => field.value && field.confidence !== undefined && field.confidence < 0.85);
+  }
+
+  private hasLowConfidenceForAutomaticCrop(fields: Record<string, ContainerField>): boolean {
+    return Object.entries(fields).some(([key, field]) => key !== 'containerId'
+      && field.value && field.confidence !== undefined && field.confidence < 0.85);
   }
 
   private ocrResultScore(lines: OcrLine[]): number {
@@ -1638,34 +1689,60 @@ export class App {
       if (regulationsValue && approvalLine) fields.applicableRegulations = { value: regulationsValue, confidence: approvalLine.mean };
       if (tankCode) fields.tankCode = { value: tankCode, confidence: tankLine.mean };
 
-      const followingLines = text.slice(unTankIndex + 1, unTankIndex + 6);
-      const parseTankWeight = (line: typeof text[number] | undefined) => {
-        const match = line?.normalized.match(/(\d[\d ,.]*?)\s*(KG|LBS?|IBS?|BS?)?\s*\/\s*(\d[\d ,.]*?)\s*(KG|LBS?|IBS?|BS?)?\s*$/);
+      const parseTankWeight = (line: typeof text[number]) => {
+        const match = line.normalized.match(/(\d[\d ,.]*?)\s*KG\s*\/\s*(\d[\d ,.]*?)\s*[A-Z]+\b/);
         if (!match) return undefined;
-        const firstUnit = match[2] === 'KG' ? 'KG' : match[2] ? 'LB' : undefined;
-        const secondUnit = match[4] === 'KG' ? 'KG' : match[4] ? 'LB' : undefined;
         return {
-          kg: { value: match[1].trim(), inferred: firstUnit !== 'KG' },
-          lb: { value: match[3].trim(), inferred: secondUnit !== 'LB' },
+          line,
+          kg: { value: match[1].trim() },
+          lb: { value: match[2].trim() },
         };
       };
-      const gross = parseTankWeight(followingLines[0]);
-      const tare = parseTankWeight(followingLines[1]);
-      const capacity = followingLines[2]?.normalized.match(/(\d[\d ,.]*?)\s*L\b[^\d]*(\d[\d ,.]*?)\s*(?:US\s*)?GAL\b/);
-      const setTankWeight = (pair: ReturnType<typeof parseTankWeight>, kgKey: 'mpgmKg' | 'tareKg', lbKey: 'mpgmLb' | 'tareLb', line: typeof text[number] | undefined) => {
-        if (!line) return;
-        if (!pair) return;
-        fields[kgKey] = { value: pair.kg.value, unit: 'KG', confidence: line.mean, inferred: pair.kg.inferred };
-        fields[lbKey] = { value: pair.lb.value, unit: 'LB', confidence: line.mean, inferred: pair.lb.inferred };
-      };
-      setTankWeight(gross, 'mpgmKg', 'mpgmLb', followingLines[0]);
-      setTankWeight(tare, 'tareKg', 'tareLb', followingLines[1]);
-      if (followingLines[2] && capacity) {
-        fields.capacityLiters = { value: capacity[1].trim(), unit: 'L', confidence: followingLines[2].mean };
-        fields.capacityUsGallons = { value: capacity[2].trim(), unit: 'US GAL', confidence: followingLines[2].mean };
+      const tankWeightRows = text.flatMap((line) => {
+        const match = parseTankWeight(line);
+        return match ? [match] : [];
+      });
+      const gross = tankWeightRows[0];
+      const tare = tankWeightRows[1];
+      const capacityPattern = /(\d[\d ,.]*?)\s*L\b[^\d]*(\d[\d ,.]*?)\s*US\s*GAL\b/;
+      let capacityIndex = -1;
+      let capacityEndIndex = -1;
+      let capacity: RegExpMatchArray | undefined;
+      for (let index = 0; index < text.length; index++) {
+        const sameLine = text[index].normalized.match(capacityPattern);
+        if (sameLine) {
+          capacityIndex = index;
+          capacityEndIndex = index;
+          capacity = sameLine;
+          break;
+        }
+        const nextLine = text[index + 1];
+        if (!nextLine) continue;
+        const combined = `${text[index].normalized} ${nextLine.normalized}`.match(capacityPattern);
+        if (combined) {
+          capacityIndex = index;
+          capacityEndIndex = index + 1;
+          capacity = combined;
+          break;
+        }
       }
-      if (followingLines[3]) fields.kemlerCode = { value: followingLines[3].normalized.trim(), confidence: followingLines[3].mean };
-      if (followingLines[4]) fields.unNumber = { value: followingLines[4].normalized.replace(/^UN\s*/, '').trim(), confidence: followingLines[4].mean };
+      const setTankWeight = (pair: ReturnType<typeof parseTankWeight>, kgKey: 'mpgmKg' | 'tareKg', lbKey: 'mpgmLb' | 'tareLb', line: typeof text[number] | undefined) => {
+        if (!pair) return;
+        fields[kgKey] = { value: pair.kg.value, unit: 'KG', confidence: line?.mean };
+        fields[lbKey] = { value: pair.lb.value, unit: 'LB', confidence: line?.mean };
+      };
+      setTankWeight(gross, 'mpgmKg', 'mpgmLb', gross?.line);
+      setTankWeight(tare, 'tareKg', 'tareLb', tare?.line);
+      if (capacityIndex >= 0 && capacity) {
+        const liters = capacity[1].trim().match(/[\d,.]+$/)?.[0] ?? capacity[1].trim();
+        const gallons = capacity[2].trim().match(/[\d,.]+$/)?.[0] ?? capacity[2].trim();
+        fields.capacityLiters = { value: liters, unit: 'L', confidence: text[capacityIndex].mean };
+        fields.capacityUsGallons = { value: gallons, unit: 'US GAL', confidence: text[capacityIndex].mean };
+      }
+      const kemlerLine = capacityEndIndex >= 0 ? text[capacityEndIndex + 1] : undefined;
+      const unNumberLine = capacityEndIndex >= 0 ? text[capacityEndIndex + 2] : undefined;
+      if (kemlerLine) fields.kemlerCode = { value: kemlerLine.normalized.trim(), confidence: kemlerLine.mean };
+      if (unNumberLine) fields.unNumber = { value: unNumberLine.normalized.replace(/^UN\s*/, '').trim(), confidence: unNumberLine.mean };
     }
 
     const weightAfter = (label: RegExp, unit: 'KG' | 'LB') => {

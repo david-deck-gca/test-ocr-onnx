@@ -148,8 +148,12 @@ The extracted result includes:
 - Maximum gross weight (`MPGM`, `MGW`, or `MAX.GR.`) in kilograms and pounds.
 - TARE and payload weights in kilograms and pounds.
 - Capacity in printed liters, US gallons, cubic meters, and cubic feet.
+- For UN tanks, the first two rows matching `number KG / number letters` are extracted as maximum gross weight and TARE. The first number is stored as kilograms and the second as pounds.
+- For UN tanks, a row matching `number L / number US GAL` is extracted as capacity. The two OCR rows immediately following that row are extracted as the Kemler code and UN number.
 
 For slash-paired weights, an unreadable second unit may be inferred from the readable first unit. For example, `4300KG/9480s` produces `4300 KG` and inferred `9480 LB`. Explicit units remain authoritative, and inferred fields are marked as inferred in the result.
+
+The UN-tank pattern rules take precedence over positional assumptions and do not infer missing weight units. Rows that do not contain the required `KG` suffix and trailing letter suffix are ignored for UN-tank weight extraction.
 
 ## Results and Saving
 

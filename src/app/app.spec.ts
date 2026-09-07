@@ -749,6 +749,7 @@ describe('App', () => {
     app.rawScans.set([
       { label: 'Original size', lines: [{ text: 'HCSU 799790 9', confidence: 98 }], durationMs: 320 },
       { label: '1.4x enlarged', lines: [{ text: 'TARE 3,650 KG', confidence: 94 }], durationMs: 480 },
+      { label: '3x container ID check digit', lines: [{ text: '9', confidence: 86 }], durationMs: 520 },
     ]);
     fixture.detectChanges();
 
@@ -758,9 +759,12 @@ describe('App', () => {
     expect(panel.textContent).toContain('1.4x enlarged');
     expect(panel.textContent).toContain('320 ms');
     expect(panel.textContent).toContain('480 ms');
-    expect(panel.querySelectorAll('tbody tr')).toHaveLength(2);
+    expect(panel.querySelectorAll('tbody tr')).toHaveLength(3);
+    expect(panel.querySelectorAll('.raw-scans > section')).toHaveLength(3);
     expect(panel.textContent).toContain('98%');
     expect(panel.textContent).not.toContain('(98%)');
+    expect(panel.querySelector('thead th:last-child')?.textContent).toBe('Confidence');
+    expect(panel.querySelectorAll('tbody td:last-child')).toHaveLength(3);
   });
 
   it('should replace the previous crop before processing', async () => {
@@ -1170,7 +1174,7 @@ describe('App', () => {
     expect(fields['capacityLiters'].value).toBe('25,000');
   });
 
-  it('should extract UN TANK fields positionally and export them', () => {
+  it('should extract UN TANK fields from marking patterns and export them', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
@@ -1181,8 +1185,11 @@ describe('App', () => {
     const fields = app.extractFields([
       { text: '22 A1 RID-ADR-IMDG', mean: 0.99 },
       { text: 'UN TANK T11', mean: 0.98 },
+      { text: 'UNRELATED 123 KG', mean: 0.99 },
       { text: '30,480 KG / 67,200 LB', mean: 0.97 },
+      { text: 'UNRELATED LINE', mean: 0.99 },
       { text: '2,100 KG / 4,630 LB', mean: 0.96 },
+      { text: 'UNRELATED CAPACITY 10 L', mean: 0.99 },
       { text: '33,200 L / 8,770 US GAL', mean: 0.95 },
       { text: '33', mean: 0.94 },
       { text: 'UN 1203', mean: 0.93 },
@@ -1212,7 +1219,7 @@ describe('App', () => {
     });
   });
 
-  it('should infer missing UN TANK weight units from slash-separated positions', () => {
+  it('should ignore UN TANK slash pairs without the required KG and letter units', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string; inferred?: boolean }>;
@@ -1227,20 +1234,42 @@ describe('App', () => {
       { text: '1203', mean: 0.94 },
     ]);
 
-    expect(fields['mpgmKg']).toMatchObject({ value: '30,480', inferred: false });
-    expect(fields['mpgmLb']).toMatchObject({ value: '67,200', inferred: true });
-    expect(fields['tareKg']).toMatchObject({ value: '2,100', inferred: true });
-    expect(fields['tareLb']).toMatchObject({ value: '4,630', inferred: false });
+    expect(fields['mpgmKg'].value).toBe('');
+    expect(fields['mpgmLb'].value).toBe('');
+    expect(fields['tareKg'].value).toBe('');
+    expect(fields['tareLb'].value).toBe('');
 
     const bothMissing = app.extractFields([
       { text: 'UN TANK T11 22A1 Applicable Regulations', mean: 0.99 },
       { text: '30,480 / 67,200', mean: 0.98 },
       { text: '2,100 / 4,630', mean: 0.97 },
     ]);
-    expect(bothMissing['mpgmKg'].inferred).toBe(true);
-    expect(bothMissing['mpgmLb'].inferred).toBe(true);
-    expect(bothMissing['tareKg'].inferred).toBe(true);
-    expect(bothMissing['tareLb'].inferred).toBe(true);
+    expect(bothMissing['mpgmKg'].value).toBe('');
+    expect(bothMissing['mpgmLb'].value).toBe('');
+    expect(bothMissing['tareKg'].value).toBe('');
+    expect(bothMissing['tareLb'].value).toBe('');
+  });
+
+  it('should associate UN TANK codes after a capacity split across OCR lines', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      extractFields(lines: Array<{ text: string; mean: number }>): Record<string, { value: string }>;
+    };
+
+    const fields = app.extractFields([
+      { text: 'UN TANK T22', mean: 0.99 },
+      { text: '4300 KG / 9480 LBS', mean: 0.98 },
+      { text: '773 KG / 1704 LBS', mean: 0.97 },
+      { text: '86 1105 L', mean: 0.96 },
+      { text: '292 US GAL', mean: 0.95 },
+      { text: '368', mean: 0.94 },
+      { text: 'UN 3286', mean: 0.93 },
+    ]);
+
+    expect(fields['capacityLiters'].value).toBe('1105');
+    expect(fields['capacityUsGallons'].value).toBe('292');
+    expect(fields['kemlerCode'].value).toBe('368');
+    expect(fields['unNumber'].value).toBe('3286');
   });
 
   it('should fully extract images/iso-tank_frontal.jpg markings', () => {
@@ -1619,7 +1648,7 @@ describe('App', () => {
 
     const region = app.checkDigitRegion([{ text: 'HCSU 799790', mean: 0.95, box: [[100, 100], [300, 100], [300, 130], [100, 130]] }], 1000, 1000);
 
-    expect(region).toEqual({ x: 0.09, y: 0.1, width: 0.266, height: 0.03 });
+     expect(region).toEqual({ x: 0.09, y: 0.07, width: 0.266, height: 0.09 });
   });
 
   it('should exclude OCR lines above and below the partial container ID', () => {
@@ -1636,7 +1665,7 @@ describe('App', () => {
       { text: 'RID ADR', mean: 0.9, box: [[100, 145], [220, 145], [220, 165], [100, 165]] },
     ], 1000, 1000);
 
-    expect(region).toEqual({ x: 0.09, y: 0.1, width: 0.266, height: 0.03 });
+     expect(region).toEqual({ x: 0.09, y: 0.07, width: 0.266, height: 0.09 });
   });
 
   it('should propose a crop from an ID stem split across OCR regions', () => {
@@ -1711,6 +1740,56 @@ describe('App', () => {
     expect(app.status()).toBe('Partial container ID located: HCSU 799790');
     expect(app.analysisSuccessful()).toBe(true);
     expect(app.fields()['containerId']).toEqual({ value: 'HCSU799790', confidence: 0.95 });
+  });
+
+  it('should target a partial ID without retrying the automatic crop', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      imageSelection: number;
+      waitForPreviewImage: ReturnType<typeof vi.fn>;
+      scanAutoCrop: ReturnType<typeof vi.fn>;
+      createSuggestedCrop: ReturnType<typeof vi.fn>;
+      scanCropRegion: ReturnType<typeof vi.fn>;
+      runCheckDigitScan: ReturnType<typeof vi.fn>;
+      prepareInitialCrop(image: Blob, selection: number): Promise<void>;
+    };
+    const crop = { x: 0.2, y: 0.1, width: 0.5, height: 0.3 };
+    app.imageSelection = 1;
+    app.waitForPreviewImage = vi.fn().mockResolvedValue({ naturalWidth: 1920, naturalHeight: 1080 } as HTMLImageElement);
+    app.scanAutoCrop = vi.fn().mockResolvedValue([
+      { text: 'HCSU 799790', mean: 0.95, box: [[300, 100], [500, 100], [500, 130], [300, 130]] },
+    ]);
+    app.createSuggestedCrop = vi.fn().mockResolvedValue(crop);
+    app.scanCropRegion = vi.fn();
+    app.runCheckDigitScan = vi.fn().mockResolvedValue(undefined);
+
+    await app.prepareInitialCrop(new Blob(['image'], { type: 'image/jpeg' }), 1);
+
+    expect(app.scanCropRegion).not.toHaveBeenCalled();
+    expect(app.runCheckDigitScan).toHaveBeenCalledWith(crop, expect.any(Array));
+  });
+
+  it('should not retry the automatic crop for a low-confidence container ID alone', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      imageSelection: number;
+      waitForPreviewImage: ReturnType<typeof vi.fn>;
+      scanAutoCrop: ReturnType<typeof vi.fn>;
+      createSuggestedCrop: ReturnType<typeof vi.fn>;
+      scanCropRegion: ReturnType<typeof vi.fn>;
+      prepareInitialCrop(image: Blob, selection: number): Promise<void>;
+    };
+    app.imageSelection = 1;
+    app.waitForPreviewImage = vi.fn().mockResolvedValue({ naturalWidth: 1920, naturalHeight: 1080 } as HTMLImageElement);
+    app.scanAutoCrop = vi.fn().mockResolvedValue([
+      { text: 'HCSU 799790 9', mean: 0.8, box: [[300, 100], [500, 100], [500, 130], [300, 130]] },
+    ]);
+    app.createSuggestedCrop = vi.fn().mockResolvedValue({ x: 0.2, y: 0.1, width: 0.5, height: 0.3 });
+    app.scanCropRegion = vi.fn();
+
+    await app.prepareInitialCrop(new Blob(['image'], { type: 'image/jpeg' }), 1);
+
+    expect(app.scanCropRegion).not.toHaveBeenCalled();
   });
 
   it('should report a full ID and all expected fields for images/iso-tank_frontal.jpg', async () => {

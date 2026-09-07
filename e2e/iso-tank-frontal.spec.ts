@@ -191,13 +191,16 @@ test.describe('real OCR regressions', () => {
           has: page.getByRole('rowheader', { name: label, exact: true }),
         });
 
-      await expect(row).toHaveCount(1);
-      if (label === 'Container ID') await expectContainerId(row, value, true);
-      else await expect(row.locator('input')).toHaveValue(value);
+       await expect(row).toHaveCount(1);
+       if (label === 'Container ID') await expectContainerId(row, value, true);
+       else await expect(row.locator('input')).toHaveValue(value);
       if (unit !== null) {
         await expect(row.locator('.unit')).toContainText(unit);
-      }
+     }
+
     }
+    await expect(page.locator('.raw-scans > section').filter({ hasText: '2x automatic crop' })).toHaveCount(0);
+    await expect(page.locator('.raw-scans > section').filter({ hasText: '2x container ID' })).toHaveCount(1);
   });
 
   test('extracts the UN tank 3 markings', async ({ page }) => {
@@ -323,10 +326,13 @@ test.describe('real OCR regressions', () => {
       }
     }
 
-    await expect(page.getByRole('heading', { name: 'Raw detected text' })).toBeVisible();
-    await expect(page.locator('.raw-scans > section')).not.toHaveCount(0);
+     await expect(page.getByRole('heading', { name: 'Raw detected text' })).toBeVisible();
+     await expect(page.locator('.raw-scans > section')).not.toHaveCount(0);
+    await expect(page.locator('.raw-scans > section').filter({ hasText: '2x automatic crop' })).toHaveCount(0);
     const idRetry = page.locator('.raw-scans > section').filter({ hasText: '2x container ID' });
     await expect(idRetry).toHaveCount(1);
-    await expect(idRetry).toContainText('9');
+    const digitRetry = page.locator('.raw-scans > section').filter({ hasText: '3x container ID check digit' });
+    await expect(digitRetry).toHaveCount(1);
+    await expect(digitRetry).toContainText('9');
   });
 });

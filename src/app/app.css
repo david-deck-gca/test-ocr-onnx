@@ -437,14 +437,14 @@ video {
   font: 700 0.85rem Arial, sans-serif;
   margin: 0;
 }
+.raw-text-heading {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
 .raw-scans {
   display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   margin-top: 8px;
-}
-.raw-scans > section {
-  min-width: 0;
 }
 .raw-text table {
   border-collapse: collapse;
@@ -457,11 +457,20 @@ video {
 .raw-text th {
   color: #8cae91;
 }
+.raw-text th:first-child {
+  text-align: left;
+}
 .raw-text td,
 .raw-text th {
   border-bottom: 1px solid #32443a;
   overflow-wrap: anywhere;
   padding: 2px 4px;
+}
+.raw-text th:last-child,
+.raw-text td:last-child {
+  text-align: right;
+  white-space: nowrap;
+  width: 10ch;
 }
 .raw-text section > p {
   font-size: 0.65rem;
