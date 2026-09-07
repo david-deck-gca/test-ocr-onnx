@@ -713,7 +713,7 @@ export class App {
       const duration = ` (${Math.round(performance.now() - startedAt)} ms)`;
        if (suggestedCrop) {
          this.cropDraft.set(suggestedCrop);
-         const retryStatus = automaticRetryReason ? ` Automatic 2x scan completed because ${automaticRetryReason} was below 85%.` : '';
+          const retryStatus = automaticRetryReason ? `\nAutomatic 2x scan ran because some fields had confidence below the 85% threshold: ${automaticRetryReason}.` : '';
            const completeContainerId = this.validateContainerId(fields.containerId.value);
            this.status.set(completeContainerId
              ? `Container ID located${duration}: ${this.formatContainerId(fields.containerId.value)}${retryStatus}\n`

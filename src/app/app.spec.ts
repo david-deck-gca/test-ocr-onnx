@@ -345,7 +345,7 @@ describe('App', () => {
     expect((fixture.nativeElement as HTMLElement).querySelectorAll('.select-control')).toHaveLength(0);
   });
 
-  it('should show Photo, Crop, and Unwarp controls in that order after selecting an image', () => {
+  it('should show Photo and Crop controls after selecting an image', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       useImage(image: Blob, name: string): void;
@@ -357,9 +357,8 @@ describe('App', () => {
       fixture.detectChanges();
 
       const controls = Array.from((fixture.nativeElement as HTMLElement).querySelector('.capture-controls')!.children);
-      expect(controls.map((control) => control.className)).toEqual(['photo-actions', 'select-control', 'select-control']);
+      expect(controls.map((control) => control.className)).toEqual(['photo-actions', 'select-control']);
       expect((controls[1].querySelector('select') as HTMLSelectElement).value).toBe('auto-crop');
-      expect((controls[2].querySelector('select') as HTMLSelectElement).value).toBe('no');
     } finally {
       vi.unstubAllGlobals();
     }
@@ -500,7 +499,7 @@ describe('App', () => {
     }
   });
 
-  it('should select cylindrical unwarping for the selected region', () => {
+  it('should retain cylindrical unwarping state for the selected region', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       unwarpSelectedRegion: () => boolean;
@@ -519,10 +518,8 @@ describe('App', () => {
       app.setUnwarpRotation(3.5);
       fixture.detectChanges();
 
-      const select = (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLSelectElement>('.select-control select')[1];
       expect(app.unwarpSelectedRegion()).toBe(true);
       expect(app.unwarpRotation()).toBe(3.5);
-      expect(select.value).toBe('yes');
       expect((fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('.rotation-control input')?.value).toBe('3.5');
     } finally {
       vi.unstubAllGlobals();
@@ -1870,7 +1867,7 @@ describe('App', () => {
     expect(app.fields()['payloadKg'].confidence).toBe(0.78);
     expect(app.fields()['capacityLiters'].value).toBe('25.000');
     expect(app.fields()['capacityLiters'].confidence).toBe(0.96);
-    expect(app.status()).toContain('Automatic 2x scan completed because MGW 80%, TARE 84%, PAYLOAD 78%, CAPACITY 81% was below 85%.');
+    expect(app.status()).toContain('Automatic 2x scan ran because some fields had confidence below the 85% threshold: MGW 80%, TARE 84%, PAYLOAD 78%, CAPACITY 81%.');
     expect(app.scanCropRegion).toHaveBeenCalledWith(expect.any(Blob), expect.objectContaining({ width: expect.any(Number), height: expect.any(Number) }), 2, 4_000_000, expect.anything());
     expect(app.cropDraft().x).toBeLessThan(0.2);
     expect(app.cropDraft().width).toBeLessThan(0.3);

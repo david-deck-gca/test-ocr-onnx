@@ -348,6 +348,7 @@ video {
 .status p {
   color: #c6d3c8;
   font-size: 0.84rem;
+  white-space: pre-line;
 }
 .status span {
   background: #95c6a0;
@@ -420,7 +421,7 @@ video {
   font-weight: 700;
   letter-spacing: 0.04em;
   margin-top: 8px;
-  padding: 12px 55px 12px 11px;
+  padding: 8px 55px 8px 11px;
   text-transform: uppercase;
   width: 100%;
 }
@@ -450,7 +451,6 @@ video {
   border-collapse: collapse;
   color: #bdcabf;
   font-size: 0.62rem;
-  line-height: 1.25;
   table-layout: fixed;
   width: 100%;
 }
