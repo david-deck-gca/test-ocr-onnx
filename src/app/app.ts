@@ -903,7 +903,7 @@ export class App {
       this.addDiagnostic('Check digit OCR', 'The source image dimensions are not available yet.');
       return;
     }
-    const region = this.checkDigitRegion(lines, imageSize.naturalWidth, imageSize.naturalHeight, crop);
+     const region = this.checkDigitRegion(lines, imageSize.naturalWidth, imageSize.naturalHeight, crop);
     if (!region) {
       this.addDiagnostic('Check digit OCR', 'The first 10 container-ID characters could not define a check-digit region.');
       return;
@@ -915,14 +915,14 @@ export class App {
     let pass: { url: string; revokeUrl: boolean } | null = null;
     try {
       this.status.set('Scanning the expected check-digit region...');
-      pass = await this.createCheckDigitPass(image, region);
+       pass = await this.createCheckDigitPass(image, region);
       this.clearCheckDigitPreview();
       this.checkDigitPreviewUrl.set(pass.url);
       retainPass = true;
       const detected = await this.detectWithRecovery(pass.url, { retried: false });
       const scan = detected.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) }));
       this.rawScans.update((scans) => [...scans, {
-        label: 'Check-digit region',
+         label: '2x container ID',
         lines: scan,
         durationMs: Math.round(performance.now() - startedAt),
       }]);
@@ -942,8 +942,13 @@ export class App {
     const current = this.fields().containerId;
     const candidates = detected
       .map((line) => {
-        const digits = line.text.match(/\d/g) ?? [];
-        return { digit: digits.length === 1 ? digits[0] : undefined, confidence: line.mean };
+        const normalized = line.text.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+        const suffix = normalized.startsWith(stem) ? normalized.slice(stem.length) : '';
+        const digits = normalized.match(/\d/g) ?? [];
+        return {
+          digit: /^\d$/.test(suffix) ? suffix : digits.length === 1 ? digits[0] : undefined,
+          confidence: line.mean,
+        };
       })
       .filter((item): item is { digit: string; confidence: number } => Boolean(item.digit))
       .sort((first, second) => second.confidence - first.confidence);
@@ -987,12 +992,12 @@ export class App {
     const anchor = stemLines.find((line) => line.box?.length && line.text.replace(/[^A-Z0-9]/gi, '').toUpperCase().includes(stem));
     const normalizedAnchor = anchor?.text.replace(/[^A-Z0-9]/gi, '').toUpperCase();
     const anchorBounds = anchor ? this.boxBounds(anchor.box) : null;
-    const stemRight = anchor && normalizedAnchor
-      ? anchorBounds!.left + (anchorBounds!.right - anchorBounds!.left) * ((normalizedAnchor.indexOf(stem) + stem.length) / normalizedAnchor.length)
-      : idBounds.right;
-    const characterWidth = Math.max(1, (stemRight - idBounds.left) / 10);
-    const left = Math.max(cropBounds.left, stemRight - characterWidth * 1.5);
-    const right = Math.min(cropBounds.right, stemRight + characterWidth * 2.8);
+     const stemRight = anchor && normalizedAnchor
+       ? anchorBounds!.left + (anchorBounds!.right - anchorBounds!.left) * ((normalizedAnchor.indexOf(stem) + stem.length) / normalizedAnchor.length)
+       : idBounds.right;
+     const characterWidth = Math.max(1, (stemRight - idBounds.left) / 10);
+     const left = Math.max(cropBounds.left, idBounds.left - characterWidth * 0.5);
+     const right = Math.min(cropBounds.right, stemRight + characterWidth * 2.8);
     const top = Math.max(cropBounds.top, idBounds.top);
     const bottom = Math.min(cropBounds.bottom, idBounds.bottom);
     if (right <= left || bottom <= top) return null;
@@ -1026,7 +1031,7 @@ export class App {
       const sourceY = Math.round(region.y * decodedImage.height);
       const sourceWidth = Math.max(1, Math.round(region.width * decodedImage.width));
       const sourceHeight = Math.max(1, Math.round(region.height * decodedImage.height));
-      const scale = this.cropOutputScale(sourceWidth, sourceHeight, 3, undefined, this.runtimeCropPixelBudget(MAX_CHECK_DIGIT_CROP_PIXELS));
+       const scale = this.cropOutputScale(sourceWidth, sourceHeight, 2, undefined, this.runtimeCropPixelBudget(MAX_CHECK_DIGIT_CROP_PIXELS));
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(sourceWidth * scale));
       canvas.height = Math.max(1, Math.round(sourceHeight * scale));

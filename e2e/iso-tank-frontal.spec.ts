@@ -279,7 +279,7 @@ test.describe('real OCR regressions', () => {
     }
   });
 
-  test('extracts the small UN tank markings and recovers its check digit', async ({ page }) => {
+  test('extracts the small UN tank markings and directly detects its check digit', async ({ page }) => {
     test.setTimeout(180_000);
 
     await page.goto('/');
@@ -314,13 +314,9 @@ test.describe('real OCR regressions', () => {
       if (label === 'Container ID') {
         const fullIdInput = row.locator('input[aria-label="Container ID"]');
         const inferredDigitInput = row.locator('input[aria-label="Inferred container ID check digit"]');
-        if (await inferredDigitInput.count()) {
-          await expect(fullIdInput).toHaveValue('EUXU 700756');
-          await expect(inferredDigitInput).toHaveValue('9');
-          await expect(row.locator('.unit span')).toHaveAttribute('aria-label', 'ISO 6346 check digit inferred');
-        } else {
-          await expect(fullIdInput).toHaveValue(value);
-        }
+        await expect(fullIdInput).toHaveValue(value);
+        await expect(inferredDigitInput).toHaveCount(0);
+        await expect(row.locator('.unit span')).toHaveAttribute('aria-label', 'ISO 6346 check digit valid');
       } else {
         await expect(row.locator('input')).toHaveValue(value);
         if (unit !== null) await expect(row.locator('.unit')).toContainText(unit);
@@ -329,5 +325,8 @@ test.describe('real OCR regressions', () => {
 
     await expect(page.getByRole('heading', { name: 'Raw detected text' })).toBeVisible();
     await expect(page.locator('.raw-scans > section')).not.toHaveCount(0);
+    const idRetry = page.locator('.raw-scans > section').filter({ hasText: '2x container ID' });
+    await expect(idRetry).toHaveCount(1);
+    await expect(idRetry).toContainText('9');
   });
 });

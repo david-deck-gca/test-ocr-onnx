@@ -1567,6 +1567,19 @@ describe('App', () => {
     expect(app.fields()['containerId'].value).toBe('HCSU7997909');
   });
 
+  it('should treat a complete OCR container ID as a directly detected check digit', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      fields: { (): Record<string, { value: string; inferred?: boolean }>; update(updater: (fields: Record<string, { value: string; inferred?: boolean }>) => Record<string, { value: string; inferred?: boolean }>): void };
+      applyCheckDigitCandidate(lines: Array<{ text: string; mean: number }>, detected: Array<{ text: string; mean: number }>): void;
+    };
+    const stem = { text: 'EUXU 700756', mean: 0.95, box: [[100, 100], [300, 100], [300, 130], [100, 130]] };
+
+    app.applyCheckDigitCandidate([stem], [{ text: 'EUXU 700756 9', mean: 0.98 }]);
+
+    expect(app.fields()['containerId']).toMatchObject({ value: 'EUXU7007569', inferred: false });
+  });
+
   it('should infer the checksum when targeted OCR finds no digit', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -1606,7 +1619,7 @@ describe('App', () => {
 
     const region = app.checkDigitRegion([{ text: 'HCSU 799790', mean: 0.95, box: [[100, 100], [300, 100], [300, 130], [100, 130]] }], 1000, 1000);
 
-    expect(region).toEqual({ x: 0.27, y: 0.1, width: 0.086, height: 0.03 });
+    expect(region).toEqual({ x: 0.09, y: 0.1, width: 0.266, height: 0.03 });
   });
 
   it('should exclude OCR lines above and below the partial container ID', () => {
@@ -1623,7 +1636,7 @@ describe('App', () => {
       { text: 'RID ADR', mean: 0.9, box: [[100, 145], [220, 145], [220, 165], [100, 165]] },
     ], 1000, 1000);
 
-    expect(region).toEqual({ x: 0.27, y: 0.1, width: 0.086, height: 0.03 });
+    expect(region).toEqual({ x: 0.09, y: 0.1, width: 0.266, height: 0.03 });
   });
 
   it('should propose a crop from an ID stem split across OCR regions', () => {
