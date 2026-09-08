@@ -43,3 +43,4 @@ The image picker accepts `image/*`, so it supports formats the user's browser ca
 3. Add a sample-image evaluation set and field-level accuracy benchmark.
 4. Add model-version switching and offline cache status management.
 5. Improve partial-ID check-digit recovery with an OCR ensemble: scan the full ID row at 2x, scan the rightmost digit area at 3x, accept only checksum-valid OCR candidates, and distinguish directly detected digits from checksum-inferred fallback values.
+6. Investigate the iPhone automatic-crop issue reproduced with `general-purpose_4ft_frontal.webp`: the selected region can be too narrow on the right, clipping the ISO 6346 check digit so only part of it is scanned and the digit must be inferred. Preserve enough right-side margin for the complete digit and validate the improvement on iPhone.
