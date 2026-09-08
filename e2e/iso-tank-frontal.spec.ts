@@ -1,7 +1,7 @@
 import { expect, test, type Locator } from '@playwright/test';
 import path from 'node:path';
 
-async function expectContainerId(row: Locator, expected: string, directlyDetected = false): Promise<void> {
+async function expectContainerId(row: Locator, expected: string): Promise<void> {
   const expectedCanonical = expected.replace(/\s/g, '');
   await expect.poll(async () => {
     const stemInput = row.locator('input[aria-label="Container ID"]');
@@ -10,10 +10,8 @@ async function expectContainerId(row: Locator, expected: string, directlyDetecte
     const digit = await inferredDigitInput.count() ? await inferredDigitInput.inputValue() : '';
     return `${stem}${digit}`.replace(/\s/g, '');
   }).toBe(expectedCanonical);
-  if (directlyDetected) {
-    await expect(row.locator('input[aria-label="Inferred container ID check digit"]')).toHaveCount(0);
-    await expect(row.locator('.unit span')).toHaveAttribute('aria-label', 'ISO 6346 check digit valid');
-  }
+  await expect(row.locator('input[aria-label="Inferred container ID check digit"]')).toHaveCount(0);
+  await expect(row.locator('.unit span')).toHaveAttribute('aria-label', 'ISO 6346 check digit valid');
 }
 
 test.describe('real OCR regressions', () => {
@@ -192,7 +190,7 @@ test.describe('real OCR regressions', () => {
         });
 
        await expect(row).toHaveCount(1);
-       if (label === 'Container ID') await expectContainerId(row, value, true);
+       if (label === 'Container ID') await expectContainerId(row, value);
        else await expect(row.locator('input')).toHaveValue(value);
       if (unit !== null) {
         await expect(row.locator('.unit')).toContainText(unit);
@@ -319,7 +317,7 @@ test.describe('real OCR regressions', () => {
 
       await expect(row).toHaveCount(1);
       if (label === 'Container ID') {
-        await expectContainerId(row, value, true);
+        await expectContainerId(row, value);
       } else {
         await expect(row.locator('input')).toHaveValue(value);
         if (unit !== null) await expect(row.locator('.unit')).toContainText(unit);
