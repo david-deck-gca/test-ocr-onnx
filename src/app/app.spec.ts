@@ -1578,7 +1578,21 @@ describe('App', () => {
 
     const crop = await app.createSuggestedCrop(lines, 'AGZU111135', new Blob(), { width: 1_000, height: 500 });
 
-    expect(crop).toEqual({ x: 0.352, y: 0.152, width: 0.276, height: 0.246 });
+    expect(crop).toEqual({ x: 0.352, y: 0.152, width: 0.3, height: 0.246 });
+  });
+
+  it('should keep the original right padding for UN tank automatic crops', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      createSuggestedCrop(lines: Array<{ text: string; mean: number; box?: number[][] }>, containerId: string, image: Blob, sourceSize: { width: number; height: number }): Promise<{ x: number; y: number; width: number; height: number } | null>;
+    };
+
+    const crop = await app.createSuggestedCrop([
+      { text: 'EUXU 700756 UN TANK', mean: 0.95, box: [[400, 100], [580, 100], [580, 125], [400, 125]] },
+    ], 'EUXU700756', new Blob(), { width: 1_000, height: 500 });
+
+    expect(crop).not.toBeNull();
+    expect(crop!.width).toBeLessThan(0.3);
   });
 
   it('should accept only a checksum-valid targeted check digit', () => {

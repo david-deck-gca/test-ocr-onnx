@@ -1222,7 +1222,9 @@ export class App {
     try {
       const padding = Math.max(24, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.08);
       const leftPadding = Math.max(48, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.12);
-      const rightPadding = Math.max(48, Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top) * 0.07);
+      const markingSize = Math.max(markingsBounds.right - markingsBounds.left, markingsBounds.bottom - markingsBounds.top);
+      const isUnTank = lines.some((line) => /\bUN\s*TANK\b/i.test(line.text));
+      const rightPadding = isUnTank ? Math.max(48, markingSize * 0.07) : Math.max(72, markingSize * 0.12);
       const left = Math.max(0, markingsBounds.left - leftPadding);
       const top = Math.max(0, markingsBounds.top - padding);
       const right = Math.min(width, markingsBounds.right + rightPadding);
