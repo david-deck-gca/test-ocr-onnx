@@ -9,7 +9,7 @@ type CropRect = { x: number; y: number; width: number; height: number };
 type BoxBounds = { left: number; top: number; right: number; bottom: number };
 type CropResizeHandle = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 type DecodedImage = { source: CanvasImageSource; width: number; height: number; release: () => void };
-type RawScan = { label: string; lines: Array<{ text: string; confidence: number }>; durationMs: number };
+type RawScan = { label: string; lines: Array<{ text: string; confidence: number }>; durationMs: number; pixelCount: number };
 type StoredRecord = { id: string; savedAt: string; payload: unknown; thumbnail?: Blob; hasImage?: boolean; image?: Blob };
 type StoredImage = { id: string; image: Blob };
 type SavedRecord = StoredRecord & { thumbnailUrl: string | null };
@@ -134,6 +134,8 @@ export class App {
   private imageSelection = 0;
   private previewRetries = 0;
   private previewLoad: { selection: number; resolve: (image: HTMLImageElement) => void; reject: (reason: Error) => void } | null = null;
+  private lastAutoCropPixelCount = 0;
+  private lastCropPassPixelCount = 0;
 
   protected openFilePicker(): void {
     this.clearFields();
@@ -659,11 +661,12 @@ export class App {
         }
       }
       this.rawText.set(lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`));
-      this.rawScans.set([{
-        label: 'Full photo',
-        lines: lines.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
-        durationMs: Math.round(performance.now() - scanStartedAt),
-      }]);
+       this.rawScans.set([{
+         label: 'Full photo',
+         lines: lines.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
+         durationMs: Math.round(performance.now() - scanStartedAt),
+         pixelCount: this.lastAutoCropPixelCount,
+       }]);
        let fields = this.extractFields(lines);
         const containerId = fields.containerId.value;
         const partialContainerId = /^[A-Z]{3}[UJZ]\d{6}$/.test(containerId)
@@ -686,11 +689,12 @@ export class App {
              automaticRetryReason = this.lowConfidenceSummary(fields);
             this.status.set(`Low confidence detected in ${automaticRetryReason}. Retrying the automatic crop at 2x to improve recognition...`);
             const retryLines = await this.scanCropRegion(image, suggestedCrop, 2, MAX_MANUAL_RETRY_CROP_PIXELS, { retried: false });
-           this.rawScans.update((scans) => [...scans, {
-             label: '2x automatic crop',
-             lines: retryLines.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
-             durationMs: Math.round(performance.now() - retryStartedAt),
-           }]);
+            this.rawScans.update((scans) => [...scans, {
+              label: '2x automatic crop',
+              lines: retryLines.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
+              durationMs: Math.round(performance.now() - retryStartedAt),
+              pixelCount: this.lastCropPassPixelCount,
+            }]);
            lines = this.selectBestOcrLines([lines, retryLines]);
            this.rawText.set(lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`));
            fields = this.mergeFieldsByConfidence(fields, this.extractFields(retryLines));
@@ -754,6 +758,7 @@ export class App {
 
   private async scanAutoCrop(source: HTMLImageElement, maximumPixels: number): Promise<OcrLine[]> {
     const pass = await this.createCropPassFromSource(source, source.naturalWidth, source.naturalHeight, DEFAULT_CROP, 1, undefined, maximumPixels);
+    this.lastAutoCropPixelCount = pass.pixelCount;
     try {
       return this.deduplicateLines((await this.detectWithTimeout(pass.url)).map((line) => ({
         ...line,
@@ -800,6 +805,7 @@ export class App {
 
   private async scanCropRegion(image: Blob, crop: CropRect, scale: number, maximumPixels: number, recovery: { retried: boolean }): Promise<OcrLine[]> {
     const pass = await this.createCropPass(image, crop, scale, undefined, maximumPixels);
+    this.lastCropPassPixelCount = pass.pixelCount;
     try {
       return this.deduplicateLines((await this.detectWithRecovery(pass.url, recovery)).map((line) => ({
         ...line,
@@ -854,11 +860,12 @@ export class App {
          scanResults.push(scan);
          const lines = this.deduplicateLines(scanResults.flat());
          this.rawText.set(lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`));
-         this.rawScans.update((scans) => [...scans, {
-          label: definition.label === 'Enlarged' ? `${pass.scale.toFixed(1)}x enlarged` : definition.label,
-           lines: scan.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
-           durationMs: Math.round(performance.now() - startedAt),
-         }]);
+          this.rawScans.update((scans) => [...scans, {
+           label: definition.label === 'Enlarged' ? `${pass.scale.toFixed(1)}x enlarged` : definition.label,
+            lines: scan.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
+            durationMs: Math.round(performance.now() - startedAt),
+            pixelCount: pass.pixelCount,
+          }]);
          if (manualCrop && !shouldUnwarp && index === 0) {
            if (!this.hasLowConfidence(this.extractFields(scan))) {
              break;
@@ -915,7 +922,7 @@ export class App {
     this.processing.set(true);
     const startedAt = performance.now();
     let retainPass = false;
-    let pass: { url: string; revokeUrl: boolean } | null = null;
+    let pass: { url: string; revokeUrl: boolean; pixelCount: number } | null = null;
     try {
       this.status.set('Scanning the expected check-digit region...');
        pass = await this.createCheckDigitPass(image, region, 2);
@@ -934,11 +941,12 @@ export class App {
          }));
        }
        const scan = detected.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) }));
-      this.rawScans.update((scans) => [...scans, {
-         label: '2x container ID',
-        lines: scan,
-        durationMs: Math.round(performance.now() - startedAt),
-      }]);
+       this.rawScans.update((scans) => [...scans, {
+          label: '2x container ID',
+         lines: scan,
+         durationMs: Math.round(performance.now() - startedAt),
+         pixelCount: pass!.pixelCount,
+       }]);
        let directlyDetected = this.applyCheckDigitCandidate(lines, detected, false);
        if (!directlyDetected) {
          if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
@@ -949,11 +957,12 @@ export class App {
          retainPass = true;
          const digitDetected = await this.detectWithRecovery(pass.url, { retried: false });
          const digitScan = digitDetected.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) }));
-         this.rawScans.update((scans) => [...scans, {
-           label: '3x container ID check digit',
-           lines: digitScan,
-           durationMs: Math.round(performance.now() - startedAt),
-         }]);
+          this.rawScans.update((scans) => [...scans, {
+            label: '3x container ID check digit',
+            lines: digitScan,
+            durationMs: Math.round(performance.now() - startedAt),
+            pixelCount: pass!.pixelCount,
+          }]);
          directlyDetected = this.applyCheckDigitCandidate(lines, digitDetected, false);
          if (!directlyDetected) this.applyCheckDigitCandidate(lines, digitDetected);
        }
@@ -1070,7 +1079,7 @@ export class App {
     return [];
   }
 
-  private async createCheckDigitPass(image: Blob, region: CropRect, requestedScale = 2): Promise<{ url: string; revokeUrl: boolean }> {
+  private async createCheckDigitPass(image: Blob, region: CropRect, requestedScale = 2): Promise<{ url: string; revokeUrl: boolean; pixelCount: number }> {
     const decodedImage = await this.decodeImage(image);
     try {
       const sourceX = Math.round(region.x * decodedImage.width);
@@ -1086,7 +1095,7 @@ export class App {
         if (!context) throw new Error('Canvas 2D context is unavailable.');
         context.drawImage(decodedImage.source, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
         const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((result) => result ? resolve(result) : reject(new Error('Check-digit crop could not be created.')), 'image/png'));
-        return { url: URL.createObjectURL(blob), revokeUrl: true };
+        return { url: URL.createObjectURL(blob), revokeUrl: true, pixelCount: canvas.width * canvas.height };
       } finally {
         canvas.width = 0;
         canvas.height = 0;
@@ -1191,6 +1200,16 @@ export class App {
 
   protected cropResizeHandleLabel(handle: CropResizeHandle): string {
     return `Resize crop from ${handle.replace('-', ' ')}`;
+  }
+
+  protected rawScanPixelSize(scan: RawScan): string {
+    if (scan.pixelCount >= 1_000_000) return `${this.formatPixelValue(scan.pixelCount / 1_000_000)} MP`;
+    if (scan.pixelCount >= 1_000) return `${this.formatPixelValue(scan.pixelCount / 1_000)} kpx`;
+    return `${scan.pixelCount} px`;
+  }
+
+  private formatPixelValue(value: number): string {
+    return value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2);
   }
 
   private async createSuggestedCrop(lines: OcrLine[], containerId: string, image: Blob, sourceSize?: { width: number; height: number }): Promise<CropRect | null> {
@@ -1320,7 +1339,7 @@ export class App {
     };
   }
 
-  private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number, unwarp = false, rotation = 0, curvature = 0): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }> {
+  private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number, unwarp = false, rotation = 0, curvature = 0): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean; pixelCount: number }> {
     const decodedImage = await this.decodeImage(image);
     try {
       return await this.createCropPassFromSource(decodedImage.source, decodedImage.width, decodedImage.height, crop, scale, maximumWidth, maximumPixels, unwarp, rotation, curvature);
@@ -1350,7 +1369,7 @@ export class App {
     }
   }
 
-  private async createCropPassFromSource(source: CanvasImageSource, imageWidth: number, imageHeight: number, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number, unwarp = false, rotation = 0, curvature = 0): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean }> {
+  private async createCropPassFromSource(source: CanvasImageSource, imageWidth: number, imageHeight: number, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number, unwarp = false, rotation = 0, curvature = 0): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean; pixelCount: number }> {
     const sourceX = Math.round(crop.x * imageWidth);
     const sourceY = Math.round(crop.y * imageHeight);
     const sourceWidth = Math.max(1, Math.round(crop.width * imageWidth));
@@ -1376,7 +1395,7 @@ export class App {
         if (result) resolve(result);
         else reject(new Error('Manual crop could not be created.'));
       }, 'image/png'));
-      return { url: URL.createObjectURL(blob), offsetX: sourceX, offsetY: sourceY, scale: outputScale, revokeUrl: true };
+      return { url: URL.createObjectURL(blob), offsetX: sourceX, offsetY: sourceY, scale: outputScale, revokeUrl: true, pixelCount: outputWidth * outputHeight };
     } finally {
       // Reset dimensions to release this large backing store before the next image pass.
       canvas.width = 0;

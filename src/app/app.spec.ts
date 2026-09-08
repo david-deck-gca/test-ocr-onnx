@@ -739,14 +739,14 @@ describe('App', () => {
     const app = fixture.componentInstance as unknown as {
       analysisSuccessful: { set(value: boolean): void };
       cropRect: { set(value: { x: number; y: number; width: number; height: number } | null): void };
-      rawScans: { set(value: Array<{ label: string; lines: Array<{ text: string; confidence: number }>; durationMs: number }>): void };
+       rawScans: { set(value: Array<{ label: string; lines: Array<{ text: string; confidence: number }>; durationMs: number; pixelCount: number }>): void };
     };
     app.analysisSuccessful.set(true);
     app.cropRect.set({ x: 0.2, y: 0.3, width: 0.4, height: 0.2 });
     app.rawScans.set([
-      { label: 'Original size', lines: [{ text: 'HCSU 799790 9', confidence: 98 }], durationMs: 320 },
-      { label: '1.4x enlarged', lines: [{ text: 'TARE 3,650 KG', confidence: 94 }], durationMs: 480 },
-      { label: '3x container ID check digit', lines: [{ text: '9', confidence: 86 }], durationMs: 520 },
+       { label: 'Original size', lines: [{ text: 'HCSU 799790 9', confidence: 98 }], durationMs: 320, pixelCount: 1_440_000 },
+       { label: '1.4x enlarged', lines: [{ text: 'TARE 3,650 KG', confidence: 94 }], durationMs: 480, pixelCount: 2_822_400 },
+       { label: '3x container ID check digit', lines: [{ text: '9', confidence: 86 }], durationMs: 520, pixelCount: 64_800 },
     ]);
     fixture.detectChanges();
 
@@ -754,8 +754,11 @@ describe('App', () => {
     expect(panel.textContent).toContain('RAW DETECTED TEXT FOR SELECTED REGION');
     expect(panel.textContent).toContain('Original size');
     expect(panel.textContent).toContain('1.4x enlarged');
-    expect(panel.textContent).toContain('320 ms');
-    expect(panel.textContent).toContain('480 ms');
+     expect(panel.textContent).toContain('320 ms');
+     expect(panel.textContent).toContain('480 ms');
+     expect(panel.textContent).toContain('1.44 MP');
+     expect(panel.textContent).toContain('2.82 MP');
+     expect(panel.textContent).toContain('64.8 kpx');
     expect(panel.querySelectorAll('tbody tr')).toHaveLength(3);
     expect(panel.querySelectorAll('.raw-scans > section')).toHaveLength(3);
     expect(panel.textContent).toContain('98%');
