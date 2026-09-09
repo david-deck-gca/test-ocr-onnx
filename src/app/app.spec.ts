@@ -33,7 +33,7 @@ describe('App', () => {
     expect(compiled.querySelector('.photo-actions > span')?.textContent?.trim()).toBe('Photo:');
     expect(compiled.querySelector('.capture-controls')?.children).toHaveLength(3);
     expect(compiled.querySelectorAll('.select-control')).toHaveLength(2);
-    expect((compiled.querySelectorAll('.select-control select')[0] as HTMLSelectElement).disabled).toBe(true);
+    expect((compiled.querySelectorAll('.select-control select')[0] as HTMLSelectElement).disabled).toBe(false);
     expect(compiled.querySelector('.empty-preview button')).toBeNull();
     expect(compiled.querySelector('.source-actions')).toBeNull();
   });
@@ -337,13 +337,14 @@ describe('App', () => {
     expect(app.cropDraft()).toEqual({ x: 0, y: 0, width: 1, height: 1 });
   });
 
-  it('should default to automatic crop mode with disabled image controls before photo selection', () => {
+  it('should keep the crop select visible and enabled before photo selection', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       captureMode: () => string;
     };
     expect(app.captureMode()).toBe('auto-crop');
     expect((fixture.nativeElement as HTMLElement).querySelectorAll('.select-control')).toHaveLength(2);
+    expect((fixture.nativeElement as HTMLElement).querySelector('.select-control select')).not.toHaveProperty('disabled', true);
   });
 
   it('should show Photo and Crop controls after selecting an image', () => {
@@ -384,7 +385,7 @@ describe('App', () => {
     }
   });
 
-  it('should block photo, crop, unwarp, and scan actions during auto-crop', () => {
+  it('should block photo, provider, unwarp, and scan actions during auto-crop', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       useImage(image: Blob, name: string): void;
@@ -399,7 +400,9 @@ describe('App', () => {
 
       const compiled = fixture.nativeElement as HTMLElement;
       expect(Array.from(compiled.querySelectorAll<HTMLButtonElement>('.photo-actions button')).every((button) => button.disabled)).toBe(true);
-      expect(Array.from(compiled.querySelectorAll<HTMLSelectElement>('.select-control select')).every((select) => select.disabled)).toBe(true);
+      const selects = Array.from(compiled.querySelectorAll<HTMLSelectElement>('.select-control select'));
+      expect(selects[0].disabled).toBe(true);
+      expect(selects[1].disabled).toBe(true);
       expect(compiled.querySelector<HTMLButtonElement>('.run-button')?.disabled).toBe(true);
     } finally {
       vi.unstubAllGlobals();
