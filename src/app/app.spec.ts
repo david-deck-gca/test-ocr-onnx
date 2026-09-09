@@ -31,8 +31,9 @@ describe('App', () => {
 
     expect(photoButtons.map((button) => button.textContent?.trim())).toEqual(['New', 'Existing']);
     expect(compiled.querySelector('.photo-actions > span')?.textContent?.trim()).toBe('Photo:');
-    expect(compiled.querySelector('.capture-controls')?.children).toHaveLength(1);
-    expect(compiled.querySelector('.select-control')).toBeNull();
+    expect(compiled.querySelector('.capture-controls')?.children).toHaveLength(3);
+    expect(compiled.querySelectorAll('.select-control')).toHaveLength(2);
+    expect((compiled.querySelectorAll('.select-control select')[0] as HTMLSelectElement).disabled).toBe(true);
     expect(compiled.querySelector('.empty-preview button')).toBeNull();
     expect(compiled.querySelector('.source-actions')).toBeNull();
   });
@@ -336,13 +337,13 @@ describe('App', () => {
     expect(app.cropDraft()).toEqual({ x: 0, y: 0, width: 1, height: 1 });
   });
 
-  it('should default to automatic crop mode and hide image controls before photo selection', () => {
+  it('should default to automatic crop mode with disabled image controls before photo selection', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       captureMode: () => string;
     };
     expect(app.captureMode()).toBe('auto-crop');
-    expect((fixture.nativeElement as HTMLElement).querySelectorAll('.select-control')).toHaveLength(0);
+    expect((fixture.nativeElement as HTMLElement).querySelectorAll('.select-control')).toHaveLength(2);
   });
 
   it('should show Photo and Crop controls after selecting an image', () => {
@@ -357,7 +358,7 @@ describe('App', () => {
       fixture.detectChanges();
 
       const controls = Array.from((fixture.nativeElement as HTMLElement).querySelector('.capture-controls')!.children);
-      expect(controls.map((control) => control.className)).toEqual(['photo-actions', 'select-control']);
+      expect(controls.map((control) => control.className)).toEqual(['photo-actions', 'select-control', 'select-control']);
       expect((controls[1].querySelector('select') as HTMLSelectElement).value).toBe('auto-crop');
     } finally {
       vi.unstubAllGlobals();
@@ -797,12 +798,12 @@ describe('App', () => {
     const buttons = Array.from(results.querySelectorAll<HTMLButtonElement>(':scope > .result-actions button'));
 
     expect(results.firstElementChild?.classList.contains('result-actions')).toBe(true);
-    expect(buttons.map((button) => button.textContent?.trim())).toEqual(['Scan selected crop region']);
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual(['Scan selected crop region', 'Benchmark all providers']);
 
     app.analysisSuccessful.set(true);
     fixture.detectChanges();
 
-    expect(Array.from(results.querySelectorAll<HTMLButtonElement>(':scope > .result-actions button')).map((button) => button.textContent?.trim())).toEqual(['Scan selected crop region', 'Save on this device']);
+    expect(Array.from(results.querySelectorAll<HTMLButtonElement>(':scope > .result-actions button')).map((button) => button.textContent?.trim())).toEqual(['Scan selected crop region', 'Benchmark all providers', 'Save on this device']);
   });
 
   it('should not show a manual targeted check-digit action', () => {
@@ -820,6 +821,7 @@ describe('App', () => {
     const buttons = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.result-actions button'));
     expect(buttons.map((button) => button.textContent?.trim())).toEqual([
       'Scan selected crop region',
+      'Benchmark all providers',
       'Save on this device',
     ]);
   });

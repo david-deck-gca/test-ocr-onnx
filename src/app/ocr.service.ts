@@ -2,44 +2,82 @@ import { Injectable, signal } from '@angular/core';
 import Ocr from '@gutenye/ocr-browser';
 import * as ort from 'onnxruntime-web';
 
+export type ExecutionProvider = 'wasm' | 'webgl' | 'webgpu';
+export type ProviderCapability = { provider: ExecutionProvider; available: boolean; reason?: string };
+
 @Injectable({ providedIn: 'root' })
 export class OcrService {
   readonly initializationError = signal<string | null>(null);
+  readonly providerCapabilities = signal<ProviderCapability[]>([{ provider: 'wasm', available: true }]);
 
-  private ocr: Awaited<ReturnType<typeof Ocr.create>> | null = null;
-  private initialization: Promise<void> | null = null;
+  private readonly ocrByProvider = new Map<ExecutionProvider, Awaited<ReturnType<typeof Ocr.create>>>();
+  private readonly initializationByProvider = new Map<ExecutionProvider, Promise<void>>();
+  private readonly providerErrors = new Map<ExecutionProvider, string>();
 
-  initialize(): Promise<void> {
-    if (!this.initialization) {
-      this.initialization = this.createOcr();
+  initialize(provider: ExecutionProvider = 'wasm'): Promise<void> {
+    let initialization = this.initializationByProvider.get(provider);
+    if (!initialization) {
+      initialization = this.createOcr(provider);
+      this.initializationByProvider.set(provider, initialization);
     }
-    return this.initialization;
+    return initialization;
   }
 
-  async detect(url: string) {
-    await this.initialize();
-    if (!this.ocr) {
-      throw new Error(this.initializationError() ?? 'Local OCR could not be initialized.');
+  async detect(url: string, provider: ExecutionProvider = 'wasm') {
+    await this.initialize(provider);
+    const ocr = this.ocrByProvider.get(provider);
+    if (!ocr) {
+      throw new Error(this.providerErrors.get(provider) ?? 'Local OCR could not be initialized.');
     }
-    return this.ocr.detect(url);
+    return ocr.detect(url);
   }
 
-  private async createOcr(): Promise<void> {
+  async detectProviderCapabilities(): Promise<ProviderCapability[]> {
+    const capabilities: ProviderCapability[] = [{ provider: 'wasm', available: true }];
+    const canvas = document.createElement('canvas');
+    const webgl = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
+    capabilities.push(webgl
+      ? { provider: 'webgl', available: true }
+      : { provider: 'webgl', available: false, reason: 'WebGL is not available in this browser.' });
+
+    let webgpuAvailable = false;
+    let webgpuReason = 'WebGPU is not available in this browser.';
+    try {
+      const adapter = await navigator.gpu?.requestAdapter();
+      webgpuAvailable = adapter !== null && adapter !== undefined;
+      if (!webgpuAvailable) webgpuReason = 'No compatible WebGPU adapter was found.';
+    } catch (error: unknown) {
+      webgpuReason = error instanceof Error ? error.message : String(error);
+    }
+    capabilities.push({ provider: 'webgpu', available: webgpuAvailable, ...(webgpuAvailable ? {} : { reason: webgpuReason }) });
+    this.providerCapabilities.set(capabilities);
+    return capabilities;
+  }
+
+  providerError(provider: ExecutionProvider): string | null {
+    return this.providerErrors.get(provider) ?? null;
+  }
+
+  private async createOcr(provider: ExecutionProvider): Promise<void> {
     this.initializationError.set(null);
     ort.env.wasm.wasmPaths = new URL('ort/', document.baseURI).toString();
     // One worker avoids allocating multiple large WASM heaps on memory-constrained mobile devices.
     ort.env.wasm.numThreads = 1;
 
     try {
-      this.ocr = await Ocr.create({
+      const ocr = await Ocr.create({
         models: {
           detectionPath: new URL('models/ch_PP-OCRv4_det_infer.onnx', document.baseURI).toString(),
           recognitionPath: new URL('models/ch_PP-OCRv4_rec_infer.onnx', document.baseURI).toString(),
           dictionaryPath: new URL('models/ppocr_keys_v1.txt', document.baseURI).toString(),
         },
+        onnxOptions: { executionProviders: [provider] },
       });
+      this.ocrByProvider.set(provider, ocr);
     } catch (error: unknown) {
-      this.initializationError.set(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      this.providerErrors.set(provider, message);
+      if (provider === 'wasm') this.initializationError.set(message);
     }
   }
 }

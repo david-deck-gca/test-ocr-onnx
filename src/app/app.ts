@@ -1,5 +1,5 @@
 import { Component, ElementRef, Injector, afterNextRender, computed, inject, signal, viewChild } from '@angular/core';
-import { OcrService } from './ocr.service';
+import { ExecutionProvider, OcrService, ProviderCapability } from './ocr.service';
 
 type CaptureMode = 'auto-crop' | 'manual-crop';
 type FieldKey = 'maxWorkingPressureBar' | 'maxWorkingPressurePsi' | 'containerId' | 'isoCode' | 'approvalCode' | 'applicableRegulations' | 'tankCode' | 'kemlerCode' | 'unNumber' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters' | 'capacityUsGallons' | 'capacityCubicMeters' | 'capacityCubicFeet';
@@ -10,6 +10,7 @@ type BoxBounds = { left: number; top: number; right: number; bottom: number };
 type CropResizeHandle = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 type DecodedImage = { source: CanvasImageSource; width: number; height: number; release: () => void };
 type RawScan = { label: string; lines: Array<{ text: string; confidence: number }>; durationMs: number; pixelCount: number };
+type BenchmarkResult = { provider: ExecutionProvider; available: boolean; initializationMs?: number; coldOcrMs?: number; warmOcrMs?: number; lineCount?: number; error?: string };
 type StoredRecord = { id: string; savedAt: string; payload: unknown; thumbnail?: Blob; hasImage?: boolean; image?: Blob };
 type StoredImage = { id: string; image: Blob };
 type SavedRecord = StoredRecord & { thumbnailUrl: string | null };
@@ -75,6 +76,9 @@ export class App {
   protected readonly rawText = signal<string[]>([]);
   protected readonly rawScans = signal<RawScan[]>([]);
   protected readonly rawScansCollapsed = signal(false);
+  protected readonly selectedProvider = signal<ExecutionProvider>('wasm');
+  protected readonly providerCapabilities = signal<ProviderCapability[]>([{ provider: 'wasm', available: true }]);
+  protected readonly benchmarkResults = signal<BenchmarkResult[]>([]);
   private readonly selectedOcrLines = signal<OcrLine[]>([]);
   protected readonly savedRecords = signal<SavedRecord[]>([]);
   protected readonly savedJson = signal<string | null>(null);
@@ -402,6 +406,76 @@ export class App {
     }
   }
 
+  protected setExecutionProvider(provider: string): void {
+    if (provider === 'wasm' || provider === 'webgl' || provider === 'webgpu') {
+      this.selectedProvider.set(provider);
+      this.benchmarkResults.set([]);
+    }
+  }
+
+  protected async benchmarkProviders(): Promise<void> {
+    const image = this.imageBlob();
+    if (!image) {
+      this.addDiagnostic('Provider benchmark', 'Choose an image before benchmarking execution providers.');
+      return;
+    }
+    const preview = this.previewImage()?.nativeElement;
+    if (!preview?.naturalWidth || !preview.naturalHeight) {
+      this.addDiagnostic('Provider benchmark', 'Wait for the image preview to finish loading before benchmarking.');
+      return;
+    }
+
+    this.processing.set(true);
+    this.benchmarkResults.set([]);
+    this.status.set('Preparing one identical crop for every execution provider...');
+    const crop = this.cropRect() ?? DEFAULT_CROP;
+    const maximumPixels = this.cropRect() ? MAX_MANUAL_CROP_PIXELS : MAX_FULL_PHOTO_PIXELS;
+    let pass: { url: string; revokeUrl: boolean; pixelCount: number };
+    try {
+      pass = await this.createCropPass(image, crop, 1, undefined, maximumPixels);
+    } catch (error: unknown) {
+      this.processing.set(false);
+      this.addDiagnostic('Provider benchmark', 'The image could not be prepared for benchmarking.', this.errorMessage(error));
+      return;
+    }
+    try {
+      const results: BenchmarkResult[] = [];
+      for (const capability of this.providerCapabilities()) {
+        if (!capability.available) {
+          results.push({ provider: capability.provider, available: false, error: capability.reason });
+          continue;
+        }
+        this.status.set(`Benchmarking ${this.providerLabel(capability.provider)}...`);
+        const initializationStartedAt = performance.now();
+        try {
+          await this.ocrService.initialize(capability.provider);
+          const initializationMs = Math.round(performance.now() - initializationStartedAt);
+          const coldStartedAt = performance.now();
+          const coldLines = await this.detectWithTimeout(pass.url, capability.provider);
+          const coldOcrMs = Math.round(performance.now() - coldStartedAt);
+          const warmStartedAt = performance.now();
+          const warmLines = await this.detectWithTimeout(pass.url, capability.provider);
+          const warmOcrMs = Math.round(performance.now() - warmStartedAt);
+          results.push({ provider: capability.provider, available: true, initializationMs, coldOcrMs, warmOcrMs, lineCount: warmLines.length });
+          if (!coldLines.length && warmLines.length) {
+            this.addDiagnostic('Provider benchmark', `${this.providerLabel(capability.provider)} returned text only after its warm-up run.`);
+          }
+        } catch (error: unknown) {
+          results.push({ provider: capability.provider, available: true, error: this.errorMessage(error) });
+        }
+        this.benchmarkResults.set([...results]);
+      }
+      this.status.set('Provider benchmark complete. Compare cold and warm OCR timings below.');
+    } finally {
+      if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
+      this.processing.set(false);
+    }
+  }
+
+  protected providerLabel(provider: ExecutionProvider): string {
+    return provider === 'wasm' ? 'WASM' : provider === 'webgl' ? 'WebGL' : 'WebGPU';
+  }
+
   protected async saveJsonToIndexedDb(): Promise<void> {
     const image = this.imageBlob();
     if (!image) {
@@ -537,6 +611,7 @@ export class App {
 
   protected ngOnInit(): void {
     void this.loadSavedRecords();
+    void this.ocrService.detectProviderCapabilities().then((capabilities) => this.providerCapabilities.set(capabilities));
     const initializationError = this.ocrService.initializationError();
     if (initializationError) {
       this.addDiagnostic('OCR initialization', 'Local OCR could not be initialized. Refresh the app and try again.', initializationError);
@@ -780,11 +855,11 @@ export class App {
     }
   }
 
-  private async detectWithTimeout(url: string) {
+  private async detectWithTimeout(url: string, provider = this.selectedProvider()) {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
-        this.ocrService.detect(url),
+        this.ocrService.detect(url, provider),
         new Promise<never>((_, reject) => {
           timeout = setTimeout(() => reject(new Error(`OCR did not finish within ${OCR_PASS_TIMEOUT_MS / 1000} seconds.`)), OCR_PASS_TIMEOUT_MS);
         }),

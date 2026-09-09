@@ -118,6 +118,34 @@ main {
   gap: 10px;
   margin: 0 0 15px;
 }
+.benchmark-results {
+  border-top: 1px solid #32443a;
+  margin: 0 0 16px;
+  overflow-x: auto;
+  padding-top: 12px;
+}
+.benchmark-results h3 {
+  margin: 0 0 9px;
+}
+.benchmark-results table {
+  border-collapse: collapse;
+  min-width: 100%;
+  white-space: nowrap;
+}
+.benchmark-results th,
+.benchmark-results td {
+  border-bottom: 1px solid #32443a;
+  padding: 8px;
+  text-align: left;
+}
+.benchmark-results th {
+  color: #dce8df;
+}
+.benchmark-results p {
+  color: #aab9ae;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
 .empty-preview {
   align-items: center;
   background: repeating-linear-gradient(135deg, #1d2c23, #1d2c23 8px, #1a2921 8px, #1a2921 16px);
