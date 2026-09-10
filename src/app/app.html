@@ -34,7 +34,7 @@
     </section>
 
     <section class="results" aria-label="Structured container data">
-       <div class="result-actions"><button class="capture-mode-button run-button" type="button" [disabled]="!hasImage() || !dataPlateScale() || !manualCropDrawn() || applyingCrop() || processing()" (click)="applyCropAndProcess()">Scan selected crop region</button>@if (analysisSuccessful()) { <button class="capture-mode-button" type="button" [disabled]="!hasImage() || applyingCrop() || processing()" (click)="saveJsonToIndexedDb()">Save on this device</button> }</div>
+       <div class="result-actions"><button class="capture-mode-button run-button" type="button" [disabled]="!hasImage() || ((captureMode() === 'manual-crop' || dataPlateScale()) && !manualCropDrawn()) || applyingCrop() || processing()" (click)="applyCropAndProcess()">Scan selected crop region</button>@if (analysisSuccessful()) { <button class="capture-mode-button" type="button" [disabled]="!hasImage() || applyingCrop() || processing()" (click)="saveJsonToIndexedDb()">Save on this device</button> }</div>
        @if (analysisSuccessful() && !dataPlateScale()) { <table class="field-grid">
         <tbody>
            @if (fields().maxWorkingPressureBar.value) { <tr class="max-working-pressure"><th scope="row">MAX WORKING PRESSURE</th><td><input aria-label="MAX WORKING PRESSURE BAR" [value]="fields().maxWorkingPressureBar.value" (input)="updateField('maxWorkingPressureBar', $any($event.target).value)" /></td><td class="unit">BAR</td><td class="confidence" [class.invalid]="isLowConfidence(fields().maxWorkingPressureBar)">{{ confidenceText(fields().maxWorkingPressureBar) }}</td></tr> }

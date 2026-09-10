@@ -858,7 +858,7 @@ describe('App', () => {
     fixture.detectChanges();
 
     expect(compiled.querySelector('.crop-canvas.locked')).toBeNull();
-    expect(compiled.querySelector<HTMLButtonElement>('.run-button')?.disabled).toBe(true);
+    expect(compiled.querySelector<HTMLButtonElement>('.run-button')?.disabled).toBe(false);
     expect(Array.from(compiled.querySelectorAll<HTMLButtonElement>('.crop-handle')).every((handle) => !handle.disabled)).toBe(true);
   });
 

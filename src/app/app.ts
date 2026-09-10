@@ -217,11 +217,7 @@ export class App {
 
   protected async applyCropAndProcess(): Promise<void> {
     const crop = this.cropDraft();
-    if (!this.dataPlateScale()) {
-      this.addDiagnostic('Data plate size', 'Choose an image size before scanning the selected crop.');
-      return;
-    }
-    if (!this.manualCropDrawn()) {
+    if ((this.dataPlateScale() || this.captureMode() === 'manual-crop') && !this.manualCropDrawn()) {
       this.addDiagnostic('Manual crop', 'Draw a crop around the marking to scan.');
       return;
     }
@@ -403,16 +399,26 @@ export class App {
       this.rawText.set([]);
       this.rawScans.set([]);
       this.rawScansCollapsed.set(false);
-      const scale = this.dataPlateScale();
       const crop = this.cropRect();
-      if (!scale || !crop) throw new Error('Choose a Data plate size and draw a crop before scanning.');
-      const lines = await this.scanDataPlateCrop(image, crop, scale, recovery);
+      const scale = this.dataPlateScale();
+      let lines: OcrLine[];
+      if (scale) {
+        if (!crop) throw new Error('Draw a crop before scanning the Data plate.');
+        lines = await this.scanDataPlateCrop(image, crop, scale, recovery);
+      } else {
+        const scanResults = await this.scanOcrPasses(image, recovery);
+        lines = this.selectBestOcrLines(scanResults);
+      }
       this.selectedOcrLines.set(lines);
       const rawText = lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`);
       this.rawText.set(rawText);
       const fields = this.extractFields(lines);
       this.fields.set(fields);
-      await this.runLowConfidenceFieldScans(image, lines, fields);
+      if (scale) {
+        await this.runLowConfidenceFieldScans(image, lines, fields);
+      } else if (crop && fields.containerId.value && !this.containerIdValid()) {
+        await this.runCheckDigitScan();
+      }
       let suggestedCrop: CropRect | null = null;
       if (!this.cropRect()) {
         try {
