@@ -249,7 +249,7 @@ video {
   border-radius: 4px;
   color: #eaf0eb;
   font: 700 0.72rem/1 Arial, sans-serif;
-  padding: 6px 22px 6px 8px;
+  padding: 4px 18px 4px 6px;
 }
 .rotation-control {
   align-items: flex-start;
@@ -590,4 +590,16 @@ video {
   .field-grid tbody th {
     width: 5.5rem;
   }
+}
+.compact-control select {
+  max-width: 92px;
+}
+.data-plate-control {
+  gap: 3px;
+  padding-left: 3px;
+  padding-right: 3px;
+}
+.data-plate-control select {
+  max-width: 62px;
+  width: 62px;
 }

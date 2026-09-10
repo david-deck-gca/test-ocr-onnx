@@ -31,12 +31,13 @@ describe('App', () => {
 
     expect(photoButtons.map((button) => button.textContent?.trim())).toEqual(['New', 'Existing']);
     expect(compiled.querySelector('.photo-actions > span')?.textContent?.trim()).toBe('Photo:');
-    expect(compiled.querySelector('.capture-controls')?.children).toHaveLength(3);
-    expect(compiled.querySelectorAll('.select-control')).toHaveLength(2);
-    expect((compiled.querySelectorAll('.select-control select')[0] as HTMLSelectElement).disabled).toBe(false);
+    expect(compiled.querySelector('.capture-controls')?.children).toHaveLength(4);
+    expect(compiled.querySelectorAll('.select-control')).toHaveLength(3);
+    expect((compiled.querySelectorAll('.select-control select')[0] as HTMLSelectElement).value).toBe('auto-crop');
     expect(compiled.querySelector('.empty-preview button')).toBeNull();
     expect(compiled.querySelector('.source-actions')).toBeNull();
   });
+
 
   it('should leave the results data area empty before analysis', () => {
     const fixture = TestBed.createComponent(App);
@@ -343,8 +344,9 @@ describe('App', () => {
       captureMode: () => string;
     };
     expect(app.captureMode()).toBe('auto-crop');
-    expect((fixture.nativeElement as HTMLElement).querySelectorAll('.select-control')).toHaveLength(2);
-    expect((fixture.nativeElement as HTMLElement).querySelector('.select-control select')).not.toHaveProperty('disabled', true);
+    expect((fixture.nativeElement as HTMLElement).querySelectorAll('.select-control')).toHaveLength(3);
+    const selects = (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLSelectElement>('.select-control select');
+    expect(Array.from(selects).some((select) => select.querySelector('option[value="auto-crop"]'))).toBe(true);
   });
 
   it('should show Photo and Crop controls after selecting an image', () => {
@@ -359,7 +361,7 @@ describe('App', () => {
       fixture.detectChanges();
 
       const controls = Array.from((fixture.nativeElement as HTMLElement).querySelector('.capture-controls')!.children);
-      expect(controls.map((control) => control.className)).toEqual(['photo-actions', 'select-control', 'select-control']);
+      expect(controls.map((control) => control.className)).toEqual(['photo-actions', 'select-control compact-control', 'select-control data-plate-control', 'select-control compact-control']);
       expect((controls[1].querySelector('select') as HTMLSelectElement).value).toBe('auto-crop');
     } finally {
       vi.unstubAllGlobals();
@@ -659,7 +661,7 @@ describe('App', () => {
       app.useImage(new Blob(['image'], { type: 'image/jpeg' }), 'container.jpg');
       fixture.detectChanges();
 
-      expect((fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.result-actions button')?.disabled).toBe(false);
+      expect((fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.result-actions button')?.disabled).toBe(true);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -776,11 +778,15 @@ describe('App', () => {
     const app = fixture.componentInstance as unknown as {
       cropDraft: { set(value: { x: number; y: number; width: number; height: number }): void };
       cropRect: { set(value: { x: number; y: number; width: number; height: number } | null): void; (): { x: number; y: number; width: number; height: number } | null };
+      dataPlateScale: { set(value: number): void };
+      manualCropDrawn: { set(value: boolean): void };
       processImage: ReturnType<typeof vi.fn>;
       applyCropAndProcess(): Promise<void>;
     };
     const crop = { x: 0.2, y: 0.3, width: 0.4, height: 0.2 };
     app.cropDraft.set(crop);
+    app.dataPlateScale.set(1);
+    app.manualCropDrawn.set(true);
     app.cropRect.set({ x: 0, y: 0, width: 1, height: 1 });
     app.processImage = vi.fn().mockResolvedValue(undefined);
 
@@ -801,12 +807,12 @@ describe('App', () => {
     const buttons = Array.from(results.querySelectorAll<HTMLButtonElement>(':scope > .result-actions button'));
 
     expect(results.firstElementChild?.classList.contains('result-actions')).toBe(true);
-    expect(buttons.map((button) => button.textContent?.trim())).toEqual(['Scan selected crop region', 'Benchmark all providers']);
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual(['Scan selected crop region']);
 
     app.analysisSuccessful.set(true);
     fixture.detectChanges();
 
-    expect(Array.from(results.querySelectorAll<HTMLButtonElement>(':scope > .result-actions button')).map((button) => button.textContent?.trim())).toEqual(['Scan selected crop region', 'Benchmark all providers', 'Save on this device']);
+    expect(Array.from(results.querySelectorAll<HTMLButtonElement>(':scope > .result-actions button')).map((button) => button.textContent?.trim())).toEqual(['Scan selected crop region', 'Save on this device']);
   });
 
   it('should not show a manual targeted check-digit action', () => {
@@ -824,7 +830,6 @@ describe('App', () => {
     const buttons = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('.result-actions button'));
     expect(buttons.map((button) => button.textContent?.trim())).toEqual([
       'Scan selected crop region',
-      'Benchmark all providers',
       'Save on this device',
     ]);
   });
@@ -853,7 +858,7 @@ describe('App', () => {
     fixture.detectChanges();
 
     expect(compiled.querySelector('.crop-canvas.locked')).toBeNull();
-    expect(compiled.querySelector<HTMLButtonElement>('.run-button')?.disabled).toBe(false);
+    expect(compiled.querySelector<HTMLButtonElement>('.run-button')?.disabled).toBe(true);
     expect(Array.from(compiled.querySelectorAll<HTMLButtonElement>('.crop-handle')).every((handle) => !handle.disabled)).toBe(true);
   });
 
@@ -1639,22 +1644,6 @@ describe('App', () => {
     app.applyCheckDigitCandidate([stem], []);
 
     expect(app.fields()['containerId']).toMatchObject({ value: 'EUXU7007569', inferred: true });
-  });
-
-  it('should treat any completed OCR pass with a valid ID as sufficient', () => {
-    const fixture = TestBed.createComponent(App);
-    const app = fixture.componentInstance as unknown as {
-      hasValidContainerId(results: Array<Array<{ text: string; mean: number }>>): boolean;
-    };
-
-    expect(app.hasValidContainerId([
-      [{ text: 'HCSU 799790 8', mean: 0.95 }],
-      [{ text: 'HCSU 799790 9', mean: 0.92 }],
-    ])).toBe(true);
-    expect(app.hasValidContainerId([
-      [{ text: 'HCSU 799790 8', mean: 0.95 }],
-      [{ text: 'HCSU 799790 8', mean: 0.92 }],
-    ])).toBe(false);
   });
 
   it('should locate the targeted region after character ten in a single OCR line', () => {

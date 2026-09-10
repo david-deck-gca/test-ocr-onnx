@@ -3,6 +3,7 @@ import Ocr from '@gutenye/ocr-browser';
 import * as ort from 'onnxruntime-web';
 
 export type ExecutionProvider = 'wasm' | 'webgl' | 'webgpu';
+export type OcrResultLine = { text: string; mean: number; box?: number[][] };
 export type ProviderCapability = { provider: ExecutionProvider; available: boolean; reason?: string };
 
 @Injectable({ providedIn: 'root' })
@@ -13,7 +14,6 @@ export class OcrService {
   private readonly ocrByProvider = new Map<ExecutionProvider, Awaited<ReturnType<typeof Ocr.create>>>();
   private readonly initializationByProvider = new Map<ExecutionProvider, Promise<void>>();
   private readonly providerErrors = new Map<ExecutionProvider, string>();
-
   initialize(provider: ExecutionProvider = 'wasm'): Promise<void> {
     let initialization = this.initializationByProvider.get(provider);
     if (!initialization) {
@@ -23,13 +23,13 @@ export class OcrService {
     return initialization;
   }
 
-  async detect(url: string, provider: ExecutionProvider = 'wasm') {
+  async detect(url: string, provider: ExecutionProvider = 'wasm'): Promise<OcrResultLine[]> {
     await this.initialize(provider);
     const ocr = this.ocrByProvider.get(provider);
     if (!ocr) {
       throw new Error(this.providerErrors.get(provider) ?? 'Local OCR could not be initialized.');
     }
-    return ocr.detect(url);
+    return ocr.detect(url) as Promise<OcrResultLine[]>;
   }
 
   async detectProviderCapabilities(): Promise<ProviderCapability[]> {

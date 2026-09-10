@@ -2,6 +2,7 @@ import { Component, ElementRef, Injector, afterNextRender, computed, inject, sig
 import { ExecutionProvider, OcrService, ProviderCapability } from './ocr.service';
 
 type CaptureMode = 'auto-crop' | 'manual-crop';
+type DataPlateScale = 1 | 2 | 3 | 4;
 type FieldKey = 'maxWorkingPressureBar' | 'maxWorkingPressurePsi' | 'containerId' | 'isoCode' | 'approvalCode' | 'applicableRegulations' | 'tankCode' | 'kemlerCode' | 'unNumber' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters' | 'capacityUsGallons' | 'capacityCubicMeters' | 'capacityCubicFeet';
 type OcrLine = { text: string; mean: number; box?: number[][] };
 type UnwarpGeometry = { rotation: number; curvature: number; reliable: boolean };
@@ -10,7 +11,6 @@ type BoxBounds = { left: number; top: number; right: number; bottom: number };
 type CropResizeHandle = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 type DecodedImage = { source: CanvasImageSource; width: number; height: number; release: () => void };
 type RawScan = { label: string; lines: Array<{ text: string; confidence: number }>; durationMs: number; pixelCount: number };
-type BenchmarkResult = { provider: ExecutionProvider; available: boolean; initializationMs?: number; coldOcrMs?: number; warmOcrMs?: number; lineCount?: number; error?: string };
 type StoredRecord = { id: string; savedAt: string; payload: unknown; thumbnail?: Blob; hasImage?: boolean; image?: Blob };
 type StoredImage = { id: string; image: Blob };
 type SavedRecord = StoredRecord & { thumbnailUrl: string | null };
@@ -66,6 +66,8 @@ export class App {
   protected readonly applyingCrop = signal(false);
   protected readonly cropResizeHandles: CropResizeHandle[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
   protected readonly captureMode = signal<CaptureMode>(defaultCaptureMode());
+  protected readonly dataPlateScale = signal<DataPlateScale | null>(null);
+  protected readonly manualCropDrawn = signal(false);
   protected readonly unwarpSelectedRegion = signal(false);
   protected readonly unwarpRotation = signal(0);
   protected readonly cameraOpen = signal(false);
@@ -78,7 +80,6 @@ export class App {
   protected readonly rawScansCollapsed = signal(false);
   protected readonly selectedProvider = signal<ExecutionProvider>('wasm');
   protected readonly providerCapabilities = signal<ProviderCapability[]>([{ provider: 'wasm', available: true }]);
-  protected readonly benchmarkResults = signal<BenchmarkResult[]>([]);
   private readonly selectedOcrLines = signal<OcrLine[]>([]);
   protected readonly savedRecords = signal<SavedRecord[]>([]);
   protected readonly savedJson = signal<string | null>(null);
@@ -209,10 +210,21 @@ export class App {
     if (canvas.hasPointerCapture(event.pointerId)) {
       canvas.releasePointerCapture(event.pointerId);
     }
+    if (this.cropDraft().width >= 0.02 && this.cropDraft().height >= 0.02) {
+      this.manualCropDrawn.set(true);
+    }
   }
 
   protected async applyCropAndProcess(): Promise<void> {
     const crop = this.cropDraft();
+    if (!this.dataPlateScale()) {
+      this.addDiagnostic('Data plate size', 'Choose an image size before scanning the selected crop.');
+      return;
+    }
+    if (!this.manualCropDrawn()) {
+      this.addDiagnostic('Manual crop', 'Draw a crop around the marking to scan.');
+      return;
+    }
     if (crop.width < 0.02 || crop.height < 0.02) {
       this.addDiagnostic('Manual crop', 'Draw a larger rectangle around the marking to scan.');
       return;
@@ -280,6 +292,7 @@ export class App {
   protected async setCaptureMode(mode: CaptureMode): Promise<void> {
     if (this.processing() || this.applyingCrop()) return;
     this.captureMode.set(mode);
+    this.manualCropDrawn.set(false);
     if (mode !== 'auto-crop') return;
 
     const image = this.imageBlob();
@@ -304,6 +317,24 @@ export class App {
     if (this.processing() || this.applyingCrop()) return;
     this.unwarpRotation.set(Math.max(-10, Math.min(10, degrees)));
     this.clearUnwarpedCropPreview();
+  }
+
+  protected setDataPlateScale(value: string): void {
+    if (this.processing() || this.applyingCrop()) return;
+    const scale = Number(value);
+    if (scale !== 1 && scale !== 2 && scale !== 3 && scale !== 4) {
+      this.dataPlateScale.set(null);
+      return;
+    }
+    this.dataPlateScale.set(scale);
+    this.captureMode.set('manual-crop');
+    this.manualCropDrawn.set(false);
+    this.cropRect.set(null);
+    this.cropDraft.set(DEFAULT_CROP);
+    this.manualCropDrawn.set(false);
+    this.clearFields();
+    this.clearUnwarpedCropPreview();
+    this.status.set('Draw a crop around the data plate, then scan the selected crop region.');
   }
 
   protected retryPreview(failedUrl: string): void {
@@ -366,22 +397,22 @@ export class App {
       return;
     }
     try {
-      this.status.set('Loading local PaddleOCR models...');
+       this.status.set('Loading local PaddleOCR models...');
       this.status.set('Detecting painted text regions...');
       const recovery = { retried: false };
       this.rawText.set([]);
       this.rawScans.set([]);
       this.rawScansCollapsed.set(false);
-      const scanResults = await this.scanOcrPasses(image, recovery);
-      const lines = this.selectBestOcrLines(scanResults);
+      const scale = this.dataPlateScale();
+      const crop = this.cropRect();
+      if (!scale || !crop) throw new Error('Choose a Data plate size and draw a crop before scanning.');
+      const lines = await this.scanDataPlateCrop(image, crop, scale, recovery);
       this.selectedOcrLines.set(lines);
       const rawText = lines.map((line) => `${line.text} (${Math.round(line.mean * 100)}%)`);
       this.rawText.set(rawText);
       const fields = this.extractFields(lines);
       this.fields.set(fields);
-      if (this.cropRect() && !this.hasValidContainerId(scanResults)) {
-        await this.runCheckDigitScan();
-      }
+      await this.runLowConfidenceFieldScans(image, lines, fields);
       let suggestedCrop: CropRect | null = null;
       if (!this.cropRect()) {
         try {
@@ -409,10 +440,10 @@ export class App {
   protected setExecutionProvider(provider: string): void {
     if (provider === 'wasm' || provider === 'webgl' || provider === 'webgpu') {
       this.selectedProvider.set(provider);
-      this.benchmarkResults.set([]);
     }
   }
 
+  /* Benchmark-only provider and pipeline code removed from the application.
   protected async benchmarkProviders(): Promise<void> {
     const image = this.imageBlob();
     if (!image) {
@@ -470,6 +501,193 @@ export class App {
       if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
       this.processing.set(false);
     }
+  }
+
+  private async runReducedFieldBenchmark(baseline: Record<string, BenchmarkField>): Promise<ExperimentalBenchmarkResult> {
+    const image = this.imageBlob();
+    if (!image) throw new Error('Benchmark image is not loaded.');
+    const startedAt = performance.now();
+    const scans: RawScan[] = [];
+    const reduced = await this.createBenchmarkScan(image, DEFAULT_CROP, 0.5, MAX_AUTO_CROP_FALLBACK_PIXELS, 'Reduced full photo');
+    scans.push(reduced.scan);
+    let fields = this.extractFields(reduced.lines);
+    const firstScanFields = { ...fields };
+    const rescannedKeys = new Set<string>();
+
+    for (const key of Object.keys(baseline) as FieldKey[]) {
+      const target = baseline[key];
+      if (!target?.value) continue;
+      const candidate = fields[key];
+      if (candidate?.value && (candidate.confidence ?? 0) >= (target.confidence ?? 0)
+        && this.benchmarkValue(candidate.value) === this.benchmarkValue(target.value)) continue;
+
+      const line = this.benchmarkLineForField(reduced.lines, candidate?.value, target.value);
+      const bounds = line ? this.boxBounds(line.box) : null;
+      if (!bounds) continue;
+      const crop = this.benchmarkLineCrop(bounds, this.previewImage()?.nativeElement.naturalWidth ?? 1, this.previewImage()?.nativeElement.naturalHeight ?? 1);
+      const valueBounds = line ? this.benchmarkValueBounds(line, candidate?.value || target.value) : null;
+      const valueCrop = key === 'containerId'
+        ? crop
+        : valueBounds
+        ? this.benchmarkLineCrop(valueBounds, this.previewImage()?.nativeElement.naturalWidth ?? 1, this.previewImage()?.nativeElement.naturalHeight ?? 1)
+        : crop;
+      let best = candidate;
+      rescannedKeys.add(key);
+      for (const scale of [2, 3, 4]) {
+        const retry = await this.createBenchmarkScan(image, valueCrop, scale, MAX_CHECK_DIGIT_CROP_PIXELS, `${key} ${scale}x targeted rescan`);
+        scans.push(retry.scan);
+        const retryField = this.extractBenchmarkField(key, retry.lines, target.value, best?.value);
+        const retryMatchesTarget = retryField?.value && this.benchmarkValue(retryField.value) === this.benchmarkValue(target.value);
+        const bestMatchesTarget = best?.value && this.benchmarkValue(best.value) === this.benchmarkValue(target.value);
+        if (retryField && (!best || (retryMatchesTarget && !bestMatchesTarget) || (retryMatchesTarget === bestMatchesTarget && (retryField.confidence ?? 0) > (best.confidence ?? 0)))) {
+          fields = { ...fields, [key]: { ...fields[key], ...retryField } };
+        }
+        best = fields[key] ?? best;
+        if (best?.value && (best.confidence ?? 0) >= (target.confidence ?? 0)
+          && this.benchmarkValue(best.value) === this.benchmarkValue(target.value)) break;
+      }
+    }
+
+    return {
+      durationMs: Math.round(performance.now() - startedAt),
+      firstScanFields,
+      fields,
+      rescannedKeys: [...rescannedKeys],
+      scans,
+    };
+  }
+
+  private async createBenchmarkScan(image: Blob, crop: CropRect, scale: number, maximumPixels: number, label: string): Promise<{ lines: OcrLine[]; scan: RawScan }> {
+    const pass = await this.createCropPass(image, crop, scale, undefined, maximumPixels);
+    const startedAt = performance.now();
+    try {
+      const lines = this.deduplicateLines((await this.detectWithTimeout(pass.url)).map((line) => ({
+        ...line,
+        box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
+      })));
+      return {
+        lines,
+        scan: {
+          label,
+          lines: lines.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
+          durationMs: Math.round(performance.now() - startedAt),
+          pixelCount: pass.pixelCount,
+        },
+      };
+    } finally {
+      if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
+    }
+  }
+
+  private benchmarkLineForField(lines: OcrLine[], candidateValue: string | undefined, baselineValue: string): OcrLine | undefined {
+    const candidates = [candidateValue, baselineValue]
+      .filter((value): value is string => Boolean(value))
+      .map((value) => this.benchmarkValue(value))
+      .filter(Boolean);
+    return lines
+      .filter((line) => {
+        const text = this.benchmarkValue(line.text);
+        return candidates.some((candidate) => text.includes(candidate) || candidate.includes(text));
+      })
+      .sort((first, second) => second.mean - first.mean)[0];
+  }
+
+  private benchmarkLineCrop(bounds: BoxBounds, imageWidth: number, imageHeight: number): CropRect {
+    const width = Math.max(1, bounds.right - bounds.left);
+    const height = Math.max(1, bounds.bottom - bounds.top);
+    const horizontalPadding = Math.max(24, width * 0.2);
+    const verticalPadding = Math.max(24, height * 1.25);
+    const left = Math.max(0, bounds.left - horizontalPadding);
+    const top = Math.max(0, bounds.top - verticalPadding);
+    const right = Math.min(imageWidth, bounds.right + horizontalPadding);
+    const bottom = Math.min(imageHeight, bounds.bottom + verticalPadding);
+    return { x: left / imageWidth, y: top / imageHeight, width: (right - left) / imageWidth, height: (bottom - top) / imageHeight };
+  }
+
+  private benchmarkValueBounds(line: OcrLine, value: string): BoxBounds | null {
+    const bounds = this.boxBounds(line.box);
+    if (!bounds) return null;
+    const compactValue = this.benchmarkValue(value);
+    const compactText = this.benchmarkValue(line.text);
+    if (!compactValue || !compactText) return bounds;
+    const start = compactText.indexOf(compactValue);
+    if (start < 0) return bounds;
+    const end = start + compactValue.length;
+    return {
+      left: bounds.left + (bounds.right - bounds.left) * start / compactText.length,
+      top: bounds.top,
+      right: bounds.left + (bounds.right - bounds.left) * end / compactText.length,
+      bottom: bounds.bottom,
+    };
+  }
+
+  private extractBenchmarkField(key: FieldKey, lines: OcrLine[], baselineValue: string, previousValue?: string): BenchmarkField | undefined {
+    const expected = [baselineValue, previousValue]
+      .filter((value): value is string => Boolean(value))
+      .map((value) => this.benchmarkValue(value));
+    const ranked = lines
+      .map((line) => ({ line, text: this.benchmarkValue(line.text) }))
+      .filter(({ text }) => text)
+      .sort((first, second) => {
+        const firstMatch = expected.some((value) => first.text.includes(value));
+        const secondMatch = expected.some((value) => second.text.includes(value));
+        return Number(secondMatch) - Number(firstMatch) || second.line.mean - first.line.mean;
+      });
+    const selected = ranked[0];
+    if (!selected) return undefined;
+    if (key === 'containerId') {
+      const id = selected.line.text.match(/[A-Z]{3}[UJZ]\s*(?:\d\s*){6,7}/i)?.[0]?.replace(/\s/g, '').toUpperCase();
+      return id ? { value: id, confidence: selected.line.mean } : undefined;
+    }
+    if (key === 'isoCode') {
+      const iso = selected.line.text.match(/\b\d{2}[A-Z][0-9A-Z]\b/i)?.[0]?.toUpperCase();
+      return iso ? { value: iso, confidence: selected.line.mean } : undefined;
+    }
+    const numeric = selected.line.text.match(/\d[\d ,.]*\d|\d+/)?.[0]?.trim();
+    return { value: numeric ?? selected.line.text.trim(), confidence: selected.line.mean };
+  }
+
+  private benchmarkValue(value: string): string {
+    return value.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+  }
+
+  */
+  private lineForField(lines: OcrLine[], value: string): OcrLine | undefined {
+    const expected = value.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    return lines
+      .filter((line) => {
+        const text = line.text.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+        return expected && (text.includes(expected) || expected.includes(text));
+      })
+      .sort((first, second) => second.mean - first.mean)[0];
+  }
+
+  private valueBounds(line: OcrLine, value: string): BoxBounds | null {
+    const bounds = this.boxBounds(line.box);
+    if (!bounds) return null;
+    const compactValue = value.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    const compactText = line.text.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    const start = compactText.indexOf(compactValue);
+    if (start < 0 || !compactValue || !compactText) return bounds;
+    const end = start + compactValue.length;
+    return {
+      left: bounds.left + (bounds.right - bounds.left) * start / compactText.length,
+      top: bounds.top,
+      right: bounds.left + (bounds.right - bounds.left) * end / compactText.length,
+      bottom: bounds.bottom,
+    };
+  }
+
+  private lineCrop(bounds: BoxBounds, imageWidth: number, imageHeight: number): CropRect {
+    const width = Math.max(1, bounds.right - bounds.left);
+    const height = Math.max(1, bounds.bottom - bounds.top);
+    const horizontalPadding = Math.max(24, width * 0.2);
+    const verticalPadding = Math.max(24, height * 1.25);
+    const left = Math.max(0, bounds.left - horizontalPadding);
+    const top = Math.max(0, bounds.top - verticalPadding);
+    const right = Math.min(imageWidth, bounds.right + horizontalPadding);
+    const bottom = Math.min(imageHeight, bounds.bottom + verticalPadding);
+    return { x: left / imageWidth, y: top / imageHeight, width: (right - left) / imageWidth, height: (bottom - top) / imageHeight };
   }
 
   protected providerLabel(provider: ExecutionProvider): string {
@@ -891,6 +1109,59 @@ export class App {
     }
   }
 
+  private async scanDataPlateCrop(image: Blob, crop: CropRect, divider: DataPlateScale, recovery: { retried: boolean }): Promise<OcrLine[]> {
+    const pass = await this.createCropPass(image, crop, 1 / divider, undefined, MAX_MANUAL_CROP_PIXELS);
+    try {
+      const startedAt = performance.now();
+      const detected = await this.detectWithRecovery(pass.url, recovery);
+      const lines = this.deduplicateLines(detected.map((line) => ({
+        ...line,
+        box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
+      })));
+      this.rawScans.set([{
+        label: divider === 1 ? 'Data plate original size' : `Data plate divided by ${divider}`,
+        lines: lines.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
+        durationMs: Math.round(performance.now() - startedAt),
+        pixelCount: pass.pixelCount,
+      }]);
+      return lines;
+    } finally {
+      if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
+    }
+  }
+
+  private async runLowConfidenceFieldScans(image: Blob, lines: OcrLine[], fields: Record<FieldKey, ContainerField>): Promise<void> {
+    const imageSize = this.previewImage()?.nativeElement;
+    if (!imageSize?.naturalWidth || !imageSize.naturalHeight) return;
+    for (const key of Object.keys(fields) as FieldKey[]) {
+      const field = fields[key];
+      if (key === 'containerId' || !field.value || field.confidence === undefined || field.confidence >= 0.85) continue;
+      const line = this.lineForField(lines, field.value);
+      const bounds = line ? this.boxBounds(line.box) : null;
+      if (!line || !bounds) continue;
+      const valueBounds = this.valueBounds(line, field.value) ?? bounds;
+      const valueCrop = this.lineCrop(valueBounds, imageSize.naturalWidth, imageSize.naturalHeight);
+      const startedAt = performance.now();
+      const pass = await this.createCropPass(image, valueCrop, 2, undefined, MAX_CHECK_DIGIT_CROP_PIXELS);
+      try {
+        const detected = await this.detectWithRecovery(pass.url, { retried: false });
+        const retryFields = this.extractFields(detected);
+        const retryField = retryFields[key];
+        this.rawScans.update((scans) => [...scans, {
+          label: `${key} individual rescan`,
+          lines: detected.map((detectedLine) => ({ text: detectedLine.text, confidence: Math.round(detectedLine.mean * 100) })),
+          durationMs: Math.round(performance.now() - startedAt),
+          pixelCount: pass.pixelCount,
+        }]);
+        if (retryField.value && (retryField.confidence ?? 0) > (field.confidence ?? 0)) {
+          this.fields.update((current) => ({ ...current, [key]: { ...current[key], ...retryField } }));
+        }
+      } finally {
+        if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
+      }
+    }
+  }
+
   private ocrFailureMessage(error: unknown): string {
     const message = this.errorMessage(error).toLowerCase();
     if (error instanceof RangeError || /memory|allocate|canvas|bitmap|decoded image|webgl/i.test(message)) {
@@ -1082,10 +1353,6 @@ export class App {
        containerId: { ...fields.containerId, value: stem + recoveredDigit, confidence: recoveredConfidence, inferred },
      }));
      return true;
-  }
-
-  private hasValidContainerId(results: OcrLine[][]): boolean {
-    return results.some((lines) => this.validateContainerId(this.extractFields(lines).containerId.value));
   }
 
   private findCheckDigitStem(lines: OcrLine[]): string {
