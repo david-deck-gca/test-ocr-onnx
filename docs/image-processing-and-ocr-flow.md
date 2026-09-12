@@ -66,6 +66,8 @@ Consequences:
 
 Both passes are processed sequentially. The temporary OCR image from one pass is released before the next pass is created. Results from both passes are combined and duplicate detected text is removed.
 
+For a manually selected engraved date marking known to use the `MM YY` format, the application also scans four fixed character slots independently at high scale. Common OCR letter-to-digit confusions are normalized, but a combined date is added only when the month is between `01` and `12` and all four digits are present. Each slot's raw OCR results remain visible even when no valid date can be synthesized.
+
 ### Optional Cylindrical Unwarp
 
 For cylindrical containers, the user can enable **Unwarp** after selecting a crop. The optional rotation adjustment ranges from `-10` to `+10` degrees. The application then performs three sequential passes:

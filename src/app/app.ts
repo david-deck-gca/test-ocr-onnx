@@ -2,7 +2,7 @@ import { Component, ElementRef, Injector, afterNextRender, computed, inject, sig
 import { ExecutionProvider, OcrService, ProviderCapability } from './ocr.service';
 
 type CaptureMode = 'auto-crop' | 'manual-crop';
-type DataPlateScale = 1 | 2 | 3 | 4;
+type DataPlateScale = 'original' | 'divide-2' | 'divide-3' | 'divide-4' | 'zoom-2' | 'zoom-3' | 'zoom-4' | 'zoom-5' | 'zoom-10' | 'zoom-20';
 type FieldKey = 'maxWorkingPressureBar' | 'maxWorkingPressurePsi' | 'containerId' | 'isoCode' | 'approvalCode' | 'applicableRegulations' | 'tankCode' | 'kemlerCode' | 'unNumber' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters' | 'capacityUsGallons' | 'capacityCubicMeters' | 'capacityCubicFeet';
 type OcrLine = { text: string; mean: number; box?: number[][] };
 type UnwarpGeometry = { rotation: number; curvature: number; reliable: boolean };
@@ -11,6 +11,22 @@ type BoxBounds = { left: number; top: number; right: number; bottom: number };
 type CropResizeHandle = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 type DecodedImage = { source: CanvasImageSource; width: number; height: number; release: () => void };
 type RawScan = { label: string; lines: Array<{ text: string; confidence: number }>; durationMs: number; pixelCount: number };
+type DataPlatePreprocess = 'original' | 'contrast' | 'invert-contrast' | 'clahe-dark' | 'clahe-light' | 'blackhat' | 'illumination' | 'unsharp' | 'closing' | 'adaptive-dark' | 'adaptive-light';
+type RepairTool = 'freehand' | 'line';
+type RepairColor = 'dark' | 'light';
+type RepairPoint = { x: number; y: number };
+type RepairStroke = { tool: RepairTool; color: RepairColor; width: number; points: RepairPoint[] };
+type OpenCvMat = { data: Uint8Array; rows: number; cols: number; delete: () => void };
+type OpenCvClahe = { apply: (source: OpenCvMat, destination: OpenCvMat) => void; delete: () => void };
+type OpenCvApi = {
+  COLOR_RGBA2GRAY: number;
+  Mat: new () => OpenCvMat;
+  Size: new (width: number, height: number) => unknown;
+  CLAHE?: new (clipLimit: number, tileGridSize: unknown) => OpenCvClahe;
+  matFromImageData: (image: ImageData) => OpenCvMat;
+  cvtColor: (source: OpenCvMat, destination: OpenCvMat, code: number) => void;
+  createCLAHE?: (clipLimit: number, tileGridSize: unknown) => OpenCvClahe;
+};
 type StoredRecord = { id: string; savedAt: string; payload: unknown; thumbnail?: Blob; hasImage?: boolean; image?: Blob };
 type StoredImage = { id: string; image: Blob };
 type SavedRecord = StoredRecord & { thumbnailUrl: string | null };
@@ -55,6 +71,7 @@ interface Diagnostic {
 export class App {
   protected readonly fileInput = viewChild<ElementRef<HTMLInputElement>>('fileInput');
   protected readonly previewImage = viewChild<ElementRef<HTMLImageElement>>('previewImage');
+  protected readonly repairCanvas = viewChild<ElementRef<HTMLCanvasElement>>('repairCanvas');
   protected readonly videoPreview = viewChild<ElementRef<HTMLVideoElement>>('videoPreview');
   protected readonly sourceName = signal('');
   protected readonly previewUrl = signal<string | null>(null);
@@ -64,6 +81,11 @@ export class App {
   protected readonly cropRect = signal<CropRect | null>(null);
   protected readonly cropDraft = signal<CropRect>(DEFAULT_CROP);
   protected readonly applyingCrop = signal(false);
+  protected readonly repairOpen = signal(false);
+  protected readonly repairTool = signal<RepairTool>('freehand');
+  protected readonly repairColor = signal<RepairColor>('dark');
+  protected readonly repairWidth = signal(3);
+  protected readonly repairStrokes = signal<RepairStroke[]>([]);
   protected readonly cropResizeHandles: CropResizeHandle[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
   protected readonly captureMode = signal<CaptureMode>(defaultCaptureMode());
   protected readonly dataPlateScale = signal<DataPlateScale | null>(null);
@@ -136,6 +158,8 @@ export class App {
   private readonly ocrService = inject(OcrService);
   private cropStart: { x: number; y: number } | null = null;
   private cropResize: { handle: CropResizeHandle; crop: CropRect } | null = null;
+  private repairDraft: RepairStroke | null = null;
+  private repairRedoStack: RepairStroke[] = [];
   private imageSelection = 0;
   private previewRetries = 0;
   private previewLoad: { selection: number; resolve: (image: HTMLImageElement) => void; reject: (reason: Error) => void } | null = null;
@@ -213,6 +237,140 @@ export class App {
     if (this.cropDraft().width >= 0.02 && this.cropDraft().height >= 0.02) {
       this.manualCropDrawn.set(true);
     }
+  }
+
+  protected openRepairEditor(): void {
+    if (this.processing() || this.applyingCrop()) return;
+    const crop = this.cropDraft();
+    if (crop.width < 0.02 || crop.height < 0.02) {
+      this.addDiagnostic('Manual repair', 'Draw a crop before opening the repair editor.');
+      return;
+    }
+    this.cropRect.set(crop);
+    this.repairOpen.set(true);
+    afterNextRender(() => this.renderRepairCanvas(), { injector: this.injector });
+  }
+
+  protected closeRepairEditor(): void {
+    this.repairOpen.set(false);
+    this.repairDraft = null;
+  }
+
+  protected repairImageLoaded(): void {
+    this.renderRepairCanvas();
+  }
+
+  protected setRepairTool(tool: string): void {
+    if (tool === 'freehand' || tool === 'line') this.repairTool.set(tool);
+  }
+
+  protected setRepairColor(color: string): void {
+    if (color === 'dark' || color === 'light') this.repairColor.set(color);
+  }
+
+  protected setRepairWidth(width: number): void {
+    if (Number.isFinite(width)) this.repairWidth.set(Math.max(1, Math.min(20, width)));
+  }
+
+  protected startRepair(event: PointerEvent): void {
+    if (this.processing() || this.applyingCrop()) return;
+    const point = this.repairPoint(event);
+    if (!point) return;
+    event.preventDefault();
+    const canvas = event.currentTarget as HTMLCanvasElement;
+    canvas.setPointerCapture(event.pointerId);
+    this.repairDraft = { tool: this.repairTool(), color: this.repairColor(), width: this.repairWidth(), points: [point] };
+    this.renderRepairCanvas();
+  }
+
+  protected updateRepair(event: PointerEvent): void {
+    if (!this.repairDraft) return;
+    const point = this.repairPoint(event);
+    if (!point) return;
+    if (this.repairDraft.tool === 'line') {
+      this.repairDraft = { ...this.repairDraft, points: [this.repairDraft.points[0], point] };
+    } else {
+      this.repairDraft = { ...this.repairDraft, points: [...this.repairDraft.points, point] };
+    }
+    this.renderRepairCanvas();
+  }
+
+  protected finishRepair(event: PointerEvent): void {
+    if (!this.repairDraft) return;
+    this.updateRepair(event);
+    const canvas = event.currentTarget as HTMLCanvasElement;
+    if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+    const stroke = this.repairDraft;
+    this.repairDraft = null;
+    if (stroke.points.length > 1 || stroke.tool === 'line') {
+      this.repairStrokes.update((strokes) => [...strokes, stroke]);
+      this.repairRedoStack = [];
+    }
+    this.renderRepairCanvas();
+  }
+
+  protected undoRepair(): void {
+    this.repairStrokes.update((strokes) => {
+      if (!strokes.length) return strokes;
+      const next = [...strokes];
+      const removed = next.pop();
+      if (removed) this.repairRedoStack.push(removed);
+      return next;
+    });
+    this.renderRepairCanvas();
+  }
+
+  protected redoRepair(): void {
+    const stroke = this.repairRedoStack.pop();
+    if (!stroke) return;
+    this.repairStrokes.update((strokes) => [...strokes, stroke]);
+    this.renderRepairCanvas();
+  }
+
+  protected clearRepair(): void {
+    this.repairStrokes.set([]);
+    this.repairRedoStack = [];
+    this.renderRepairCanvas();
+  }
+
+  private repairPoint(event: PointerEvent): RepairPoint | null {
+    const canvas = event.currentTarget as HTMLCanvasElement;
+    const bounds = canvas.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) return null;
+    return {
+      x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
+      y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height)),
+    };
+  }
+
+  private renderRepairCanvas(): void {
+    const canvas = this.repairCanvas()?.nativeElement;
+    const image = this.previewImage()?.nativeElement;
+    if (!canvas || !image?.naturalWidth || !image.naturalHeight) return;
+    if (canvas.width !== image.naturalWidth || canvas.height !== image.naturalHeight) {
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+    }
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    for (const stroke of [...this.repairStrokes(), ...(this.repairDraft ? [this.repairDraft] : [])]) {
+      this.drawRepairStroke(context, stroke, canvas.width, canvas.height, 1);
+    }
+  }
+
+  private drawRepairStroke(context: CanvasRenderingContext2D, stroke: RepairStroke, width: number, height: number, scale: number): void {
+    if (stroke.points.length < 1) return;
+    context.save();
+    context.beginPath();
+    context.strokeStyle = stroke.color === 'dark' ? '#111' : '#fff';
+    context.lineWidth = stroke.width * scale;
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    context.moveTo(stroke.points[0].x * width, stroke.points[0].y * height);
+    for (const point of stroke.points.slice(1)) context.lineTo(point.x * width, point.y * height);
+    context.stroke();
+    context.restore();
   }
 
   protected async applyCropAndProcess(): Promise<void> {
@@ -317,16 +475,19 @@ export class App {
 
   protected setDataPlateScale(value: string): void {
     if (this.processing() || this.applyingCrop()) return;
-    const scale = Number(value);
-    if (scale !== 1 && scale !== 2 && scale !== 3 && scale !== 4) {
+    const validScales: DataPlateScale[] = ['original', 'divide-2', 'divide-3', 'divide-4', 'zoom-2', 'zoom-3', 'zoom-4', 'zoom-5', 'zoom-10', 'zoom-20'];
+    if (!validScales.includes(value as DataPlateScale)) {
       this.dataPlateScale.set(null);
       return;
     }
-    this.dataPlateScale.set(scale);
+    this.dataPlateScale.set(value as DataPlateScale);
     this.captureMode.set('manual-crop');
     this.manualCropDrawn.set(false);
     this.cropRect.set(null);
     this.cropDraft.set(DEFAULT_CROP);
+    this.closeRepairEditor();
+    this.repairStrokes.set([]);
+    this.repairRedoStack = [];
     this.manualCropDrawn.set(false);
     this.clearFields();
     this.clearUnwarpedCropPreview();
@@ -853,6 +1014,10 @@ export class App {
     this.previewRetries = 0;
     this.sourceName.set(name);
     this.applyingCrop.set(false);
+    this.repairOpen.set(false);
+    this.repairStrokes.set([]);
+    this.repairRedoStack = [];
+    this.repairDraft = null;
     this.cropRect.set(null);
     this.cropDraft.set(DEFAULT_CROP);
     this.unwarpSelectedRegion.set(false);
@@ -1115,24 +1280,226 @@ export class App {
     }
   }
 
-  private async scanDataPlateCrop(image: Blob, crop: CropRect, divider: DataPlateScale, recovery: { retried: boolean }): Promise<OcrLine[]> {
-    const pass = await this.createCropPass(image, crop, 1 / divider, undefined, MAX_MANUAL_CROP_PIXELS);
-    try {
-      const startedAt = performance.now();
-      const detected = await this.detectWithRecovery(pass.url, recovery);
-      const lines = this.deduplicateLines(detected.map((line) => ({
-        ...line,
-        box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
-      })));
-      this.rawScans.set([{
-        label: divider === 1 ? 'Data plate original size' : `Data plate divided by ${divider}`,
-        lines: lines.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
-        durationMs: Math.round(performance.now() - startedAt),
-        pixelCount: pass.pixelCount,
-      }]);
-      return lines;
-    } finally {
-      if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
+  private async scanDataPlateCrop(image: Blob, crop: CropRect, scale: DataPlateScale, recovery: { retried: boolean }): Promise<OcrLine[]> {
+    const variants: Array<{ preprocess: DataPlatePreprocess; label: string }> = [
+      { preprocess: 'original', label: scale === 'original' ? 'Data plate original size' : `Data plate ${scale.replace('-', ' ')}` },
+      { preprocess: 'contrast', label: 'Data plate grayscale contrast' },
+      { preprocess: 'invert-contrast', label: 'Data plate inverted grayscale contrast' },
+      { preprocess: 'clahe-dark', label: 'Data plate CLAHE local contrast' },
+      { preprocess: 'clahe-light', label: 'Data plate inverted CLAHE local contrast' },
+      { preprocess: 'blackhat', label: 'Data plate black-hat morphology' },
+      { preprocess: 'illumination', label: 'Data plate illumination correction' },
+      { preprocess: 'unsharp', label: 'Data plate unsharp mask' },
+      { preprocess: 'closing', label: 'Data plate morphological closing' },
+      { preprocess: 'adaptive-dark', label: 'Data plate adaptive dark text' },
+      { preprocess: 'adaptive-light', label: 'Data plate adaptive light text' },
+    ];
+    const allLines: OcrLine[] = [];
+    const scans: RawScan[] = [];
+
+    for (const variant of variants) {
+      const pass = await this.createCropPass(image, crop, this.dataPlateOutputScale(scale), undefined, MAX_MANUAL_CROP_PIXELS, false, 0, 0, variant.preprocess);
+      try {
+        const startedAt = performance.now();
+        const detected = await this.detectWithRecovery(pass.url, recovery);
+        const lines = detected.map((line) => ({
+          ...line,
+          box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
+        }));
+        allLines.push(...lines);
+        scans.push({
+          label: variant.label,
+          lines: lines.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
+          durationMs: Math.round(performance.now() - startedAt),
+          pixelCount: pass.pixelCount,
+        });
+      } finally {
+        if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
+      }
+    }
+
+    const sourceSize = this.previewImage()?.nativeElement;
+    if (sourceSize?.naturalWidth && sourceSize.naturalHeight) {
+      const engravedDate = await this.scanEngravedMonthYear(image, crop, recovery);
+      allLines.push(...engravedDate.lines);
+      scans.push(...engravedDate.scans);
+      const engraved = await this.scanEngravedGapCrops(image, crop, allLines, sourceSize.naturalWidth, sourceSize.naturalHeight, recovery);
+      allLines.push(...engraved.lines);
+      scans.push(...engraved.scans);
+    }
+
+    const lines = this.deduplicateLines(allLines);
+    this.rawScans.set(this.repairStrokes().length
+      ? scans.map((scan) => ({ ...scan, label: `${scan.label} (manual repair)` }))
+      : scans);
+    return lines;
+  }
+
+  private async scanEngravedMonthYear(image: Blob, selectedCrop: CropRect, recovery: { retried: boolean }): Promise<{ lines: OcrLine[]; scans: RawScan[] }> {
+    const slotLines: OcrLine[][] = [[], [], [], []];
+    const scans: RawScan[] = [];
+    const preprocesses: Array<{ preprocess: DataPlatePreprocess; label: string }> = [
+      { preprocess: 'contrast', label: 'contrast' },
+      { preprocess: 'clahe-dark', label: 'CLAHE local contrast' },
+      { preprocess: 'clahe-light', label: 'inverted CLAHE local contrast' },
+      { preprocess: 'blackhat', label: 'black-hat morphology' },
+      { preprocess: 'illumination', label: 'illumination correction' },
+      { preprocess: 'unsharp', label: 'unsharp mask' },
+      { preprocess: 'closing', label: 'morphological closing' },
+      { preprocess: 'adaptive-dark', label: 'adaptive dark' },
+      { preprocess: 'adaptive-light', label: 'adaptive light' },
+    ];
+
+    for (let slot = 0; slot < 4; slot++) {
+      const padding = 0.08;
+      const left = slot / 4 + padding / 4;
+      const right = (slot + 1) / 4 - padding / 4;
+      const slotCrop: CropRect = {
+        x: selectedCrop.x + selectedCrop.width * left,
+        y: selectedCrop.y,
+        width: selectedCrop.width * (right - left),
+        height: selectedCrop.height,
+      };
+
+      for (const variant of preprocesses) {
+        const pass = await this.createCropPass(image, slotCrop, 10, undefined, MAX_CHECK_DIGIT_CROP_PIXELS, false, 0, 0, variant.preprocess);
+        try {
+          const startedAt = performance.now();
+          const detected = await this.detectWithRecovery(pass.url, recovery);
+          const mapped = detected.map((line) => ({
+            ...line,
+            box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
+          }));
+          slotLines[slot].push(...mapped);
+          scans.push({
+            label: `Engraved MM YY character ${slot + 1} (${variant.label})`,
+            lines: mapped.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
+            durationMs: Math.round(performance.now() - startedAt),
+            pixelCount: pass.pixelCount,
+          });
+        } finally {
+          if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
+        }
+      }
+    }
+
+    const characters = slotLines.map((lines) => this.bestEngravedDigit(lines));
+    const month = `${characters[0]?.digit ?? ''}${characters[1]?.digit ?? ''}`;
+    const year = `${characters[2]?.digit ?? ''}${characters[3]?.digit ?? ''}`;
+    if (!/^([0][1-9]|1[0-2])$/.test(month) || !/^\d{2}$/.test(year)) return { lines: [], scans };
+
+    const confidence = Math.min(...characters.map((character) => character!.confidence));
+    return {
+      lines: [{ text: `${month} ${year}`, mean: confidence }],
+      scans,
+    };
+  }
+
+  private bestEngravedDigit(lines: OcrLine[]): { digit: string; confidence: number } | undefined {
+    return lines
+      .map((line) => {
+        const normalized = line.text.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const digit = normalized
+          .replaceAll('O', '0')
+          .replaceAll('Q', '0')
+          .replaceAll('I', '1')
+          .replaceAll('L', '1')
+          .replaceAll('Z', '2')
+          .replaceAll('S', '5')
+          .replaceAll('G', '6')
+          .replaceAll('T', '7')
+          .replaceAll('B', '8')
+          .match(/\d/)?.[0];
+        return digit ? { digit, confidence: line.mean } : undefined;
+      })
+      .filter((candidate): candidate is { digit: string; confidence: number } => Boolean(candidate))
+      .sort((first, second) => second.confidence - first.confidence)[0];
+  }
+
+  private async scanEngravedGapCrops(image: Blob, selectedCrop: CropRect, lines: OcrLine[], imageWidth: number, imageHeight: number, recovery: { retried: boolean }): Promise<{ lines: OcrLine[]; scans: RawScan[] }> {
+    const anchors = lines.flatMap((line) => {
+      const bounds = this.boxBounds(line.box);
+      if (!bounds) return [];
+      const matches = [...line.text.toUpperCase().matchAll(/5\s*Y(?:EAR)?|BAR\.?/g)];
+      return matches.map((match) => {
+        const start = (match.index ?? 0) / Math.max(1, line.text.length);
+        const end = ((match.index ?? 0) + match[0].length) / Math.max(1, line.text.length);
+        return {
+          line,
+          text: match[0].replace(/[^A-Z0-9]/g, ''),
+          bounds: {
+            left: bounds.left + (bounds.right - bounds.left) * start,
+            right: bounds.left + (bounds.right - bounds.left) * end,
+            top: bounds.top,
+            bottom: bounds.bottom,
+          },
+        };
+      });
+    });
+    const dateLabels = anchors.filter((item) => item.text === '5Y' || item.text === '5YEAR');
+    const pressureLabels = anchors.filter((item) => item.text === 'BAR' || item.text === 'BAR.');
+    const detectedLines: OcrLine[] = [];
+    const scans: RawScan[] = [];
+
+    for (const dateLabel of dateLabels) {
+      const dateCenter = (dateLabel.bounds.top + dateLabel.bounds.bottom) / 2;
+      const pressure = pressureLabels
+        .filter((candidate) => candidate.bounds.left > dateLabel.bounds.right)
+        .filter((candidate) => Math.abs((candidate.bounds.top + candidate.bounds.bottom) / 2 - dateCenter) <= (dateLabel.bounds.bottom - dateLabel.bounds.top) * 0.8)
+        .sort((first, second) => first.bounds.left - second.bounds.left)[0];
+      if (!pressure) continue;
+
+      const rowHeight = Math.max(dateLabel.bounds.bottom - dateLabel.bounds.top, pressure.bounds.bottom - pressure.bounds.top);
+      const left = dateLabel.bounds.right + rowHeight * 0.35;
+      const right = pressure.bounds.left - rowHeight * 0.35;
+      const top = Math.max(0, dateCenter - rowHeight * 0.9);
+      const bottom = Math.min(imageHeight, dateCenter + rowHeight * 0.9);
+      if (right - left < rowHeight || bottom <= top) continue;
+      const gapCrop: CropRect = {
+        x: Math.max(selectedCrop.x, left / imageWidth),
+        y: Math.max(selectedCrop.y, top / imageHeight),
+        width: 0,
+        height: 0,
+      };
+      gapCrop.width = Math.min(selectedCrop.x + selectedCrop.width, right / imageWidth) - gapCrop.x;
+      gapCrop.height = Math.min(selectedCrop.y + selectedCrop.height, bottom / imageHeight) - gapCrop.y;
+      if (gapCrop.width <= 0 || gapCrop.height <= 0) continue;
+
+      const pass = await this.createCropPass(image, gapCrop, 10, undefined, MAX_CHECK_DIGIT_CROP_PIXELS, false, 0, 0, 'contrast');
+      try {
+        const startedAt = performance.now();
+        const detected = await this.detectWithRecovery(pass.url, recovery);
+        const mapped = detected.map((line) => ({
+          ...line,
+          box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
+        }));
+        detectedLines.push(...mapped);
+        scans.push({
+          label: 'Data plate engraved gap between 5 Y and bar (contrast)',
+          lines: mapped.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
+          durationMs: Math.round(performance.now() - startedAt),
+          pixelCount: pass.pixelCount,
+        });
+      } finally {
+        if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
+      }
+    }
+
+    return { lines: detectedLines, scans };
+  }
+
+  private dataPlateOutputScale(scale: DataPlateScale): number {
+    switch (scale) {
+      case 'divide-2': return 0.5;
+      case 'divide-3': return 1 / 3;
+      case 'divide-4': return 0.25;
+      case 'zoom-2': return 2;
+      case 'zoom-3': return 3;
+      case 'zoom-4': return 4;
+      case 'zoom-5': return 5;
+      case 'zoom-10': return 10;
+      case 'zoom-20': return 20;
+      default: return 1;
     }
   }
 
@@ -1689,10 +2056,10 @@ export class App {
     };
   }
 
-  private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number, unwarp = false, rotation = 0, curvature = 0): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean; pixelCount: number }> {
+  private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number, unwarp = false, rotation = 0, curvature = 0, preprocess: DataPlatePreprocess = 'original'): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean; pixelCount: number }> {
     const decodedImage = await this.decodeImage(image);
     try {
-      return await this.createCropPassFromSource(decodedImage.source, decodedImage.width, decodedImage.height, crop, scale, maximumWidth, maximumPixels, unwarp, rotation, curvature);
+      return await this.createCropPassFromSource(decodedImage.source, decodedImage.width, decodedImage.height, crop, scale, maximumWidth, maximumPixels, unwarp, rotation, curvature, preprocess);
     } finally {
       decodedImage.release();
     }
@@ -1719,7 +2086,7 @@ export class App {
     }
   }
 
-  private async createCropPassFromSource(source: CanvasImageSource, imageWidth: number, imageHeight: number, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number, unwarp = false, rotation = 0, curvature = 0): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean; pixelCount: number }> {
+  private async createCropPassFromSource(source: CanvasImageSource, imageWidth: number, imageHeight: number, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number, unwarp = false, rotation = 0, curvature = 0, preprocess: DataPlatePreprocess = 'original'): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean; pixelCount: number }> {
     const sourceX = Math.round(crop.x * imageWidth);
     const sourceY = Math.round(crop.y * imageHeight);
     const sourceWidth = Math.max(1, Math.round(crop.width * imageWidth));
@@ -1736,11 +2103,16 @@ export class App {
       canvas.height = outputHeight;
       const context = canvas.getContext('2d');
       if (!context) throw new Error('Canvas 2D context is unavailable.');
+      context.imageSmoothingEnabled = preprocess === 'original';
       if (unwarp) {
         this.drawCylindricalUnwarp(context, source, sourceX, sourceY, sourceWidth, sourceHeight, baseWidth, baseHeight, canvas.width, canvas.height, radians, curvature);
       } else {
         context.drawImage(source, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, baseWidth, baseHeight);
       }
+      if (!unwarp && this.repairStrokes().length) {
+        this.drawRepairStrokesOnCrop(context, this.repairStrokes(), sourceX, sourceY, sourceWidth, sourceHeight, baseWidth, baseHeight, imageWidth, imageHeight);
+      }
+      this.preprocessDataPlateCanvas(context, outputWidth, outputHeight, preprocess);
       const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((result) => {
         if (result) resolve(result);
         else reject(new Error('Manual crop could not be created.'));
@@ -1751,6 +2123,243 @@ export class App {
       canvas.width = 0;
       canvas.height = 0;
     }
+  }
+
+  private preprocessDataPlateCanvas(context: CanvasRenderingContext2D, width: number, height: number, preprocess: DataPlatePreprocess): void {
+    if (preprocess === 'original') return;
+    const image = context.getImageData(0, 0, width, height);
+    const { data } = image;
+    const grayscale = new Uint8Array(width * height);
+      for (let index = 0; index < grayscale.length; index++) {
+        const pixel = index * 4;
+        grayscale[index] = Math.round(data[pixel] * 0.299 + data[pixel + 1] * 0.587 + data[pixel + 2] * 0.114);
+      }
+
+      if (preprocess === 'clahe-dark' || preprocess === 'clahe-light') {
+        this.applyClahe(context, image, grayscale, width, height, preprocess === 'clahe-light');
+        return;
+      }
+
+      if (preprocess === 'blackhat' || preprocess === 'illumination' || preprocess === 'unsharp' || preprocess === 'closing') {
+        this.applyAdditionalEnhancement(context, image, grayscale, width, height, preprocess);
+        return;
+      }
+
+      if (preprocess === 'contrast' || preprocess === 'invert-contrast') {
+      for (let index = 0; index < grayscale.length; index++) {
+        const source = preprocess === 'invert-contrast' ? 255 - grayscale[index] : grayscale[index];
+        const value = Math.max(0, Math.min(255, Math.round((source - 128) * 1.8 + 128)));
+        const pixel = index * 4;
+        data[pixel] = value;
+        data[pixel + 1] = value;
+        data[pixel + 2] = value;
+      }
+      context.putImageData(image, 0, 0);
+      return;
+    }
+
+    // Adaptive thresholding keeps engraved strokes visible despite the plate's uneven lighting.
+    const integral = new Uint32Array((width + 1) * (height + 1));
+    for (let y = 1; y <= height; y++) {
+      let rowSum = 0;
+      for (let x = 1; x <= width; x++) {
+        rowSum += grayscale[(y - 1) * width + x - 1];
+        const integralIndex = y * (width + 1) + x;
+        integral[integralIndex] = rowSum + integral[integralIndex - width - 1];
+      }
+    }
+    const radius = Math.max(4, Math.round(Math.min(width, height) / 150));
+    for (let y = 0; y < height; y++) {
+      const top = Math.max(0, y - radius);
+      const bottom = Math.min(height - 1, y + radius);
+      for (let x = 0; x < width; x++) {
+        const left = Math.max(0, x - radius);
+        const right = Math.min(width - 1, x + radius);
+        const area = (right - left + 1) * (bottom - top + 1);
+        const sum = integral[(bottom + 1) * (width + 1) + right + 1]
+          - integral[top * (width + 1) + right + 1]
+          - integral[(bottom + 1) * (width + 1) + left]
+          + integral[top * (width + 1) + left];
+        const localMean = sum / area;
+        const value = grayscale[y * width + x];
+        const isText = preprocess === 'adaptive-dark' ? value < localMean - 8 : value > localMean + 4;
+        const output = isText ? 0 : 255;
+        const pixel = (y * width + x) * 4;
+        data[pixel] = output;
+        data[pixel + 1] = output;
+        data[pixel + 2] = output;
+        data[pixel + 3] = 255;
+      }
+    }
+    context.putImageData(image, 0, 0);
+  }
+
+  private applyAdditionalEnhancement(context: CanvasRenderingContext2D, image: ImageData, grayscale: Uint8Array, width: number, height: number, preprocess: Exclude<DataPlatePreprocess, 'original' | 'contrast' | 'invert-contrast' | 'clahe-dark' | 'clahe-light' | 'adaptive-dark' | 'adaptive-light'>): void {
+    const radius = preprocess === 'illumination' ? Math.max(2, Math.min(8, Math.round(Math.min(width, height) / 60))) : 1;
+    const local = new Uint8Array(grayscale.length);
+    const closed = new Uint8Array(grayscale.length);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        let maximum = 0;
+        let sum = 0;
+        let count = 0;
+        for (let offsetY = -radius; offsetY <= radius; offsetY++) {
+          for (let offsetX = -radius; offsetX <= radius; offsetX++) {
+            const sampleX = Math.max(0, Math.min(width - 1, x + offsetX));
+            const sampleY = Math.max(0, Math.min(height - 1, y + offsetY));
+            const sample = grayscale[sampleY * width + sampleX];
+            maximum = Math.max(maximum, sample);
+            sum += sample;
+            count++;
+          }
+        }
+        const index = y * width + x;
+        local[index] = Math.round(sum / count);
+        closed[index] = maximum;
+      }
+    }
+    if (preprocess === 'blackhat' || preprocess === 'closing') {
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          let minimum = 255;
+          for (let offsetY = -radius; offsetY <= radius; offsetY++) {
+            for (let offsetX = -radius; offsetX <= radius; offsetX++) {
+              const sampleX = Math.max(0, Math.min(width - 1, x + offsetX));
+              const sampleY = Math.max(0, Math.min(height - 1, y + offsetY));
+              minimum = Math.min(minimum, closed[sampleY * width + sampleX]);
+            }
+          }
+          closed[y * width + x] = minimum;
+        }
+      }
+      }
+
+    if (preprocess === 'blackhat') {
+      for (let index = 0; index < grayscale.length; index++) local[index] = Math.min(255, (closed[index] - grayscale[index]) * 4);
+    } else if (preprocess === 'illumination') {
+      for (let index = 0; index < grayscale.length; index++) local[index] = Math.max(0, Math.min(255, grayscale[index] - local[index] + 128));
+    } else if (preprocess === 'unsharp') {
+      for (let index = 0; index < grayscale.length; index++) local[index] = Math.max(0, Math.min(255, Math.round(grayscale[index] + (grayscale[index] - local[index]) * 1.5)));
+    } else {
+      for (let index = 0; index < grayscale.length; index++) local[index] = Math.max(0, Math.min(255, Math.round((closed[index] - 128) * 1.8 + 128)));
+    }
+
+    for (let index = 0; index < local.length; index++) {
+      const pixel = index * 4;
+      image.data[pixel] = local[index];
+      image.data[pixel + 1] = local[index];
+      image.data[pixel + 2] = local[index];
+      image.data[pixel + 3] = 255;
+    }
+    context.putImageData(image, 0, 0);
+  }
+
+  private applyClahe(context: CanvasRenderingContext2D, image: ImageData, grayscale: Uint8Array, width: number, height: number, invert: boolean): void {
+    const openCv = (globalThis as typeof globalThis & { cv?: OpenCvApi }).cv;
+    if (!openCv?.Size || (!openCv.createCLAHE && !openCv.CLAHE)) {
+      this.applyLocalClahe(context, image, grayscale, width, height, invert);
+      return;
+    }
+
+    const source = openCv.matFromImageData(image);
+    const gray = new openCv.Mat();
+    const enhanced = new openCv.Mat();
+    const tileGridSize = new openCv.Size(8, 8);
+    const clahe = openCv.createCLAHE
+      ? openCv.createCLAHE(2.5, tileGridSize)
+      : new openCv.CLAHE!(2.5, tileGridSize);
+    try {
+      openCv.cvtColor(source, gray, openCv.COLOR_RGBA2GRAY);
+      clahe.apply(gray, enhanced);
+      for (let index = 0; index < width * height; index++) {
+        const value = invert ? 255 - enhanced.data[index] : enhanced.data[index];
+        const pixel = index * 4;
+        image.data[pixel] = value;
+        image.data[pixel + 1] = value;
+        image.data[pixel + 2] = value;
+        image.data[pixel + 3] = 255;
+      }
+      context.putImageData(image, 0, 0);
+    } finally {
+      clahe.delete();
+      enhanced.delete();
+      gray.delete();
+      source.delete();
+    }
+  }
+
+  private applyLocalClahe(context: CanvasRenderingContext2D, image: ImageData, grayscale: Uint8Array, width: number, height: number, invert: boolean): void {
+    const columns = Math.min(8, width);
+    const rows = Math.min(8, height);
+    const tileWidth = Math.ceil(width / columns);
+    const tileHeight = Math.ceil(height / rows);
+
+    for (let tileY = 0; tileY < rows; tileY++) {
+      for (let tileX = 0; tileX < columns; tileX++) {
+        const left = tileX * tileWidth;
+        const top = tileY * tileHeight;
+        const right = Math.min(width, left + tileWidth);
+        const bottom = Math.min(height, top + tileHeight);
+        const histogram = new Uint32Array(256);
+        const area = (right - left) * (bottom - top);
+        for (let y = top; y < bottom; y++) {
+          for (let x = left; x < right; x++) histogram[grayscale[y * width + x]]++;
+        }
+        const clipLimit = Math.max(1, Math.floor(2.5 * area / 256));
+        let excess = 0;
+        for (let bin = 0; bin < 256; bin++) {
+          if (histogram[bin] > clipLimit) {
+            excess += histogram[bin] - clipLimit;
+            histogram[bin] = clipLimit;
+          }
+        }
+        const redistribution = Math.floor(excess / 256);
+        for (let bin = 0; bin < 256; bin++) histogram[bin] += redistribution;
+        let remainder = excess % 256;
+        for (let bin = 0; remainder > 0; bin = (bin + 1) % 256, remainder--) histogram[bin]++;
+
+        let cumulative = 0;
+        let firstNonZero = -1;
+        const lookup = new Uint8Array(256);
+        for (let bin = 0; bin < 256; bin++) {
+          cumulative += histogram[bin];
+          if (firstNonZero < 0 && histogram[bin] > 0) firstNonZero = cumulative;
+          lookup[bin] = firstNonZero < 0 || area === firstNonZero
+            ? bin
+            : Math.round((cumulative - firstNonZero) * 255 / (area - firstNonZero));
+        }
+        for (let y = top; y < bottom; y++) {
+          for (let x = left; x < right; x++) {
+            const source = lookup[grayscale[y * width + x]];
+            const value = invert ? 255 - source : source;
+            const pixel = (y * width + x) * 4;
+            image.data[pixel] = value;
+            image.data[pixel + 1] = value;
+            image.data[pixel + 2] = value;
+            image.data[pixel + 3] = 255;
+          }
+        }
+      }
+    }
+    context.putImageData(image, 0, 0);
+  }
+
+  private drawRepairStrokesOnCrop(context: CanvasRenderingContext2D, strokes: RepairStroke[], sourceX: number, sourceY: number, sourceWidth: number, sourceHeight: number, outputWidth: number, outputHeight: number, imageWidth: number, imageHeight: number): void {
+    context.save();
+    context.beginPath();
+    context.rect(0, 0, outputWidth, outputHeight);
+    context.clip();
+    for (const stroke of strokes) {
+      const mapped: RepairStroke = {
+        ...stroke,
+        points: stroke.points.map((point) => ({
+          x: (point.x * imageWidth - sourceX) / sourceWidth,
+          y: (point.y * imageHeight - sourceY) / sourceHeight,
+        })),
+      };
+      this.drawRepairStroke(context, mapped, outputWidth, outputHeight, Math.min(outputWidth / sourceWidth, outputHeight / sourceHeight));
+    }
+    context.restore();
   }
 
   private narrowLineToContainerId(line: OcrLine, containerId: string): OcrLine {

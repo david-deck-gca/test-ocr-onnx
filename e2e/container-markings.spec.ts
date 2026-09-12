@@ -331,6 +331,6 @@ test.describe('real OCR regressions', () => {
     await expect(idRetry).toHaveCount(1);
     const digitRetry = page.locator('.raw-scans > section').filter({ hasText: '3x container ID check digit' });
     await expect(digitRetry).toHaveCount(1);
-    await expect(digitRetry).toContainText('9');
-  });
+     await expect(digitRetry).toContainText('9');
+   });
 });

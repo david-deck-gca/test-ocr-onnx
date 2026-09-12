@@ -773,19 +773,40 @@ describe('App', () => {
     expect(panel.querySelectorAll('tbody td:last-child')).toHaveLength(3);
   });
 
+  it('should render both manual repair tools and repair history controls', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      previewUrl: { set(value: string | null): void };
+      repairOpen: { set(value: boolean): void };
+      manualCropDrawn: { set(value: boolean): void };
+    };
+    app.previewUrl.set('blob:image');
+    app.manualCropDrawn.set(true);
+    app.repairOpen.set(true);
+    fixture.detectChanges();
+
+    const editor = (fixture.nativeElement as HTMLElement).querySelector('.repair-editor')!;
+    expect(editor.querySelector('select option[value="freehand"]')).not.toBeNull();
+    expect(editor.querySelector('select option[value="line"]')).not.toBeNull();
+    expect(editor.querySelector('canvas[aria-label="Draw repair strokes on the selected image"]')).not.toBeNull();
+    expect(editor.textContent).toContain('Undo');
+    expect(editor.textContent).toContain('Redo');
+    expect(editor.textContent).toContain('Clear');
+  });
+
   it('should replace the previous crop before processing', async () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       cropDraft: { set(value: { x: number; y: number; width: number; height: number }): void };
       cropRect: { set(value: { x: number; y: number; width: number; height: number } | null): void; (): { x: number; y: number; width: number; height: number } | null };
-      dataPlateScale: { set(value: number): void };
+      dataPlateScale: { set(value: string): void };
       manualCropDrawn: { set(value: boolean): void };
       processImage: ReturnType<typeof vi.fn>;
       applyCropAndProcess(): Promise<void>;
     };
     const crop = { x: 0.2, y: 0.3, width: 0.4, height: 0.2 };
     app.cropDraft.set(crop);
-    app.dataPlateScale.set(1);
+    app.dataPlateScale.set('original');
     app.manualCropDrawn.set(true);
     app.cropRect.set({ x: 0, y: 0, width: 1, height: 1 });
     app.processImage = vi.fn().mockResolvedValue(undefined);
@@ -794,6 +815,17 @@ describe('App', () => {
 
     expect(app.cropRect()).toEqual(crop);
     expect(app.processImage).toHaveBeenCalled();
+  });
+
+  it('should normalize common OCR confusions when reading an engraved date digit', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      bestEngravedDigit(lines: Array<{ text: string; mean: number }>): { digit: string; confidence: number } | undefined;
+    };
+
+    expect(app.bestEngravedDigit([{ text: 'O', mean: 0.71 }])).toEqual({ digit: '0', confidence: 0.71 });
+    expect(app.bestEngravedDigit([{ text: 'S', mean: 0.82 }, { text: '5', mean: 0.77 }])).toEqual({ digit: '5', confidence: 0.82 });
+    expect(app.bestEngravedDigit([{ text: 'x', mean: 0.99 }])).toBeUndefined();
   });
 
   it('should render Scan selected crop region and Save on this device first in the results panel', () => {

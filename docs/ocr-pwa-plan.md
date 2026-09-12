@@ -24,6 +24,8 @@ One input image produces one JSON record. It includes source metadata, manual cr
 
 ## Local records and recovery
 
+Engraved `MM YY` markings use a fixed four-slot OCR fallback during Data plate scans. The slots and any valid synthesized date are retained in raw OCR results; no new structured field is created yet.
+
 Saving a result writes the JSON payload, a 160px JPEG thumbnail, and the selected image `Blob` to the browser's IndexedDB `container-mark-reader` database. The saved-result list loads only record metadata and thumbnails; the full photo is loaded from a separate IndexedDB store only after the user selects `View photo`. Existing saved photos are migrated to that store, and records without a thumbnail remain readable with a placeholder.
 
 The selected-image and selected-crop previews each retry failed Blob URL loads twice. OCR detection has a 45-second watchdog; after a failure or timeout, the app retries detection once using the already initialized OCR sessions before showing a diagnostic.
