@@ -946,6 +946,39 @@ describe('App', () => {
     }
   });
 
+  it('should show advisory camera alignment guidance without blocking capture', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      cameraOpen: { set(value: boolean): void };
+      cameraAlignmentAngle: { set(value: number | null): void };
+    };
+    app.cameraOpen.set(true);
+    app.cameraAlignmentAngle.set(4.2);
+    fixture.detectChanges();
+
+    const compiled = fixture.nativeElement as HTMLElement;
+    expect(compiled.querySelector('.camera-guidance')?.textContent?.trim()).toBe('Rotate the phone until the guide turns green.');
+    expect(compiled.querySelector<HTMLButtonElement>('.camera-actions .primary')?.disabled).toBe(false);
+
+    app.cameraAlignmentAngle.set(1.2);
+    fixture.detectChanges();
+    expect(compiled.querySelector('.camera-guidance')?.textContent?.trim()).toBe('Keep the camera level.');
+    expect(compiled.querySelector('.camera-level.aligned')).not.toBeNull();
+  });
+
+  it('should map device orientation axes to screen rotation for the sensor fallback', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      cameraRollFromOrientation(event: DeviceOrientationEvent, orientationAngle: number): number | null;
+    };
+    const event = { beta: 12, gamma: 4 } as DeviceOrientationEvent;
+
+    expect(app.cameraRollFromOrientation(event, 0)).toBe(4);
+    expect(app.cameraRollFromOrientation(event, 90)).toBe(12);
+    expect(app.cameraRollFromOrientation(event, 180)).toBe(-4);
+    expect(app.cameraRollFromOrientation(event, 270)).toBe(-12);
+  });
+
   it('should resize a crop from its bottom-right handle', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {

@@ -254,6 +254,12 @@ video {
 .camera-frame {
   background: #050805;
 }
+.camera-preview { position: relative; }
+.camera-level { --c: #d8a23a; background: var(--c); height: 2px; left: 50%; position: absolute; top: 50%; transform: translate(-50%, -50%); width: 84px; }
+.camera-level span { background: var(--c); border-radius: 50%; height: 10px; left: 50%; position: absolute; top: 50%; transform: translate(-50%, -50%); width: 10px; }
+.camera-level.aligned { --c: #72c987; }
+.camera-guidance { background: #050805cc; bottom: 8px; color: #f3d28c; left: 50%; margin: 0; padding: 6px 10px; position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.camera-guidance.aligned { color: #a5e5b2; }
 .camera-actions {
   padding: 12px;
 }
