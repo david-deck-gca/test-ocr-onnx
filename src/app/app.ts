@@ -882,7 +882,7 @@ export class App {
       });
       database.close();
       await this.loadSavedRecords();
-      this.status.set('Result and photo saved locally in IndexedDB.');
+      this.status.set('Result and photo saved locally in browser database.');
     } catch (error: unknown) {
       this.addDiagnostic('IndexedDB', 'JSON data could not be saved locally.', this.errorMessage(error));
     }
