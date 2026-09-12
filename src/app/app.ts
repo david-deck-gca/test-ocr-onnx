@@ -5,7 +5,6 @@ type CaptureMode = 'auto-crop' | 'manual-crop';
 type DataPlateScale = 'original' | 'divide-2' | 'divide-3' | 'divide-4' | 'zoom-2' | 'zoom-3' | 'zoom-4' | 'zoom-5' | 'zoom-10' | 'zoom-20';
 type FieldKey = 'maxWorkingPressureBar' | 'maxWorkingPressurePsi' | 'containerId' | 'isoCode' | 'approvalCode' | 'applicableRegulations' | 'tankCode' | 'kemlerCode' | 'unNumber' | 'mpgmKg' | 'mpgmLb' | 'tareKg' | 'tareLb' | 'payloadKg' | 'payloadLb' | 'capacityLiters' | 'capacityUsGallons' | 'capacityCubicMeters' | 'capacityCubicFeet';
 type OcrLine = { text: string; mean: number; box?: number[][] };
-type UnwarpGeometry = { rotation: number; curvature: number; reliable: boolean };
 type CropRect = { x: number; y: number; width: number; height: number };
 type BoxBounds = { left: number; top: number; right: number; bottom: number };
 type CropResizeHandle = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
@@ -27,7 +26,9 @@ type OpenCvApi = {
   cvtColor: (source: OpenCvMat, destination: OpenCvMat, code: number) => void;
   createCLAHE?: (clipLimit: number, tileGridSize: unknown) => OpenCvClahe;
 };
-type StoredRecord = { id: string; savedAt: string; payload: unknown; thumbnail?: Blob; hasImage?: boolean; image?: Blob };
+type RemoteStatus = 'not-saved-remotely' | 'saved-remotely';
+type SyncWarning = 'offline' | 'remote-unavailable' | null;
+type StoredRecord = { id: string; savedAt: string; payload: unknown; thumbnail?: Blob; hasImage?: boolean; remoteStatus?: RemoteStatus; image?: Blob };
 type StoredImage = { id: string; image: Blob };
 type SavedRecord = StoredRecord & { thumbnailUrl: string | null };
 const DEFAULT_CROP: CropRect = { x: 0, y: 0, width: 1, height: 1 };
@@ -40,11 +41,11 @@ const MAX_PREVIEW_RETRIES = 2;
 const OCR_PASS_TIMEOUT_MS = 45_000;
 const CROP_MEMORY_HEADROOM = 0.25;
 const CROP_BYTES_PER_PIXEL = 16;
-// Use a strong enough curvature correction to be visible on container sides.
-const DEFAULT_AUTO_CURVATURE = 0.25;
-const CYLINDER_UNWARP_MAX_SEGMENTS = 512;
 const THUMBNAIL_MAX_DIMENSION = 160;
 const THUMBNAIL_JPEG_QUALITY = 0.8;
+const REMOTE_API_URL = 'http://localhost:8080/api/saved-results';
+const INITIAL_SYNC_RETRY_DELAY_MS = 10_000;
+const MAX_SYNC_RETRY_DELAY_MS = 60_000;
 
 function defaultCaptureMode(): CaptureMode {
   return 'auto-crop';
@@ -75,7 +76,6 @@ export class App {
   protected readonly videoPreview = viewChild<ElementRef<HTMLVideoElement>>('videoPreview');
   protected readonly sourceName = signal('');
   protected readonly previewUrl = signal<string | null>(null);
-  protected readonly unwarpedCropUrl = signal<string | null>(null);
   protected readonly checkDigitPreviewUrl = signal<string | null>(null);
   protected readonly imageBlob = signal<Blob | null>(null);
   protected readonly cropRect = signal<CropRect | null>(null);
@@ -90,8 +90,6 @@ export class App {
   protected readonly captureMode = signal<CaptureMode>(defaultCaptureMode());
   protected readonly dataPlateScale = signal<DataPlateScale | null>(null);
   protected readonly manualCropDrawn = signal(false);
-  protected readonly unwarpSelectedRegion = signal(false);
-  protected readonly unwarpRotation = signal(0);
   protected readonly cameraOpen = signal(false);
   protected readonly processing = signal(false);
   protected readonly analysisSuccessful = signal(false);
@@ -106,6 +104,8 @@ export class App {
   protected readonly savedRecords = signal<SavedRecord[]>([]);
   protected readonly savedJson = signal<string | null>(null);
   protected readonly savedPhoto = signal<{ id: string; name: string; url: string } | null>(null);
+  protected readonly syncWarning = signal<SyncWarning>(null);
+  protected readonly savedResultsWarning = computed(() => this.hasPendingRemoteSync() ? this.syncWarning() : null);
   protected readonly fields = signal<Record<FieldKey, ContainerField>>({
     maxWorkingPressureBar: { value: '', unit: 'BAR' },
     maxWorkingPressurePsi: { value: '', unit: 'PSI' },
@@ -165,6 +165,18 @@ export class App {
   private previewLoad: { selection: number; resolve: (image: HTMLImageElement) => void; reject: (reason: Error) => void } | null = null;
   private lastAutoCropPixelCount = 0;
   private lastCropPassPixelCount = 0;
+  private syncingSavedRecords = false;
+  private syncRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private syncRetryDelayMs = INITIAL_SYNC_RETRY_DELAY_MS;
+  private readonly onlineHandler = () => {
+    this.syncWarning.set(null);
+    this.cancelSyncRetry();
+    void this.syncSavedRecords();
+  };
+  private readonly offlineHandler = () => {
+    this.cancelSyncRetry();
+    if (this.hasPendingRemoteSync()) this.syncWarning.set('offline');
+  };
 
   protected openFilePicker(): void {
     this.clearFields();
@@ -454,23 +466,7 @@ export class App {
     this.clearFields();
     this.cropRect.set(null);
     this.cropDraft.set(DEFAULT_CROP);
-    this.clearUnwarpedCropPreview();
     await this.prepareInitialCrop(image, this.imageSelection);
-  }
-
-  protected setUnwarpSelectedRegion(enabled: boolean): void {
-    if (this.processing() || this.applyingCrop()) return;
-    this.unwarpSelectedRegion.set(enabled);
-    if (!enabled) {
-      this.unwarpRotation.set(0);
-      this.clearUnwarpedCropPreview();
-    }
-  }
-
-  protected setUnwarpRotation(degrees: number): void {
-    if (this.processing() || this.applyingCrop()) return;
-    this.unwarpRotation.set(Math.max(-10, Math.min(10, degrees)));
-    this.clearUnwarpedCropPreview();
   }
 
   protected setDataPlateScale(value: string): void {
@@ -490,7 +486,6 @@ export class App {
     this.repairRedoStack = [];
     this.manualCropDrawn.set(false);
     this.clearFields();
-    this.clearUnwarpedCropPreview();
     this.status.set('Draw a crop around the data plate, then scan the selected crop region.');
   }
 
@@ -542,7 +537,6 @@ export class App {
     }
     this.analysisSuccessful.set(false);
     this.processing.set(true);
-    this.clearUnwarpedCropPreview();
     this.clearCheckDigitPreview();
     this.selectedOcrLines.set([]);
     this.diagnostics.set([]);
@@ -597,7 +591,6 @@ export class App {
       this.analysisSuccessful.set(true);
       this.processing.set(false);
     } catch (error: unknown) {
-      this.clearUnwarpedCropPreview();
       this.analysisSuccessful.set(false);
       this.processing.set(false);
       this.addDiagnostic('ONNX OCR', this.ocrFailureMessage(error), this.errorMessage(error));
@@ -874,7 +867,7 @@ export class App {
       const id = crypto.randomUUID();
       await new Promise<void>((resolve, reject) => {
         const transaction = database.transaction(['records', 'images'], 'readwrite');
-        transaction.objectStore('records').add({ id, savedAt: new Date().toISOString(), payload, thumbnail, hasImage: true });
+        transaction.objectStore('records').add({ id, savedAt: new Date().toISOString(), payload, thumbnail, hasImage: true, remoteStatus: 'not-saved-remotely' });
         transaction.objectStore('images').add({ id, image });
         transaction.oncomplete = () => resolve();
         transaction.onerror = () => reject(transaction.error);
@@ -882,7 +875,8 @@ export class App {
       });
       database.close();
       await this.loadSavedRecords();
-      this.status.set('Result and photo saved locally in IndexedDB.');
+      this.status.set('Result and photo saved locally in browser database.');
+      void this.syncSavedRecords();
     } catch (error: unknown) {
       this.addDiagnostic('IndexedDB', 'JSON data could not be saved locally.', this.errorMessage(error));
     }
@@ -942,6 +936,7 @@ export class App {
         return records.filter((record) => record.id !== id);
       });
       if (this.savedPhoto()?.id === id) this.closeSavedPhoto();
+      this.clearSyncStateWhenComplete();
       this.status.set('Saved record deleted.');
     } catch (error: unknown) {
       this.addDiagnostic('IndexedDB', 'The saved record could not be deleted.', this.errorMessage(error));
@@ -969,6 +964,7 @@ export class App {
       this.savedRecords.set([]);
       this.savedJson.set(null);
       this.closeSavedPhoto();
+      this.clearSyncStateWhenComplete();
       this.status.set('All saved results deleted.');
     } catch (error: unknown) {
       this.addDiagnostic('IndexedDB', 'Saved results could not be deleted.', this.errorMessage(error));
@@ -982,20 +978,29 @@ export class App {
   protected ngOnDestroy(): void {
     this.closeCamera();
     this.cancelPreviewLoad(new Error('The component was destroyed.'));
-    this.clearUnwarpedCropPreview();
     const current = this.previewUrl();
     if (current) {
       URL.revokeObjectURL(current);
     }
-    this.clearUnwarpedCropPreview();
     for (const record of this.savedRecords()) {
       if (record.thumbnailUrl) URL.revokeObjectURL(record.thumbnailUrl);
     }
     this.closeSavedPhoto();
+    this.cancelSyncRetry();
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', this.onlineHandler);
+      window.removeEventListener('offline', this.offlineHandler);
+    }
   }
 
   protected ngOnInit(): void {
     void this.loadSavedRecords();
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', this.onlineHandler);
+      window.addEventListener('offline', this.offlineHandler);
+      if (!navigator.onLine) this.syncWarning.set('offline');
+    }
+    void this.syncSavedRecords();
     void this.ocrService.detectProviderCapabilities().then((capabilities) => this.providerCapabilities.set(capabilities));
     const initializationError = this.ocrService.initializationError();
     if (initializationError) {
@@ -1020,8 +1025,6 @@ export class App {
     this.repairDraft = null;
     this.cropRect.set(null);
     this.cropDraft.set(DEFAULT_CROP);
-    this.unwarpSelectedRegion.set(false);
-    this.unwarpRotation.set(0);
     this.clearCheckDigitPreview();
     this.selectedOcrLines.set([]);
     this.rawText.set([]);
@@ -1090,18 +1093,167 @@ export class App {
       this.savedRecords.set(records
         .sort((first, second) => second.savedAt.localeCompare(first.savedAt))
         .map((record) => this.hydrateSavedRecord(record)));
+      void this.syncSavedRecords();
     } catch (error: unknown) {
       this.addDiagnostic('IndexedDB', 'Saved records could not be loaded.', this.errorMessage(error));
     }
   }
 
   private hydrateSavedRecord(record: StoredRecord): SavedRecord {
-    return { ...record, thumbnailUrl: record.thumbnail instanceof Blob ? URL.createObjectURL(record.thumbnail) : null };
+    return {
+      ...record,
+      remoteStatus: record.remoteStatus ?? 'not-saved-remotely',
+      thumbnailUrl: record.thumbnail instanceof Blob ? URL.createObjectURL(record.thumbnail) : null,
+    };
   }
 
   protected savedRecordName(record: SavedRecord): string {
     const source = (record.payload as { source?: { fileName?: unknown } }).source;
     return typeof source?.fileName === 'string' && source.fileName ? source.fileName : 'Container image';
+  }
+
+  protected remoteStatusLabel(record: SavedRecord): string {
+    return record.remoteStatus === 'saved-remotely' ? 'Saved remotely' : 'Not saved remotely';
+  }
+
+  private async syncSavedRecords(): Promise<void> {
+    if (this.syncingSavedRecords) return;
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      this.cancelSyncRetry();
+      if (this.hasPendingRemoteSync()) this.syncWarning.set('offline');
+      return;
+    }
+    if (!this.hasPendingRemoteSync()) {
+      this.clearSyncStateWhenComplete();
+      return;
+    }
+    this.syncingSavedRecords = true;
+    let retryRequired = false;
+    try {
+      const pendingRecords = this.savedRecords()
+        .filter((record) => record.remoteStatus !== 'saved-remotely' && record.hasImage)
+        .sort((first, second) => first.savedAt.localeCompare(second.savedAt));
+      for (const record of pendingRecords) {
+        const image = await this.loadStoredImage(record.id);
+        if (!image) continue;
+        const thumbnail = await this.ensureThumbnail(record, image);
+        if (!thumbnail) continue;
+        const form = new FormData();
+        form.append('clientRecordId', record.id);
+        form.append('json', JSON.stringify(record.payload));
+        form.append('image', image, 'container-image');
+        form.append('thumbnail', thumbnail, 'thumbnail.jpg');
+        try {
+          const response = await fetch(REMOTE_API_URL, { method: 'POST', body: form });
+          if (!response.ok) {
+            retryRequired = true;
+            this.syncWarning.set('remote-unavailable');
+            break;
+          }
+          await this.markRecordSavedRemotely(record.id);
+          this.syncRetryDelayMs = INITIAL_SYNC_RETRY_DELAY_MS;
+        } catch {
+          retryRequired = true;
+          this.syncWarning.set('remote-unavailable');
+          break;
+        }
+      }
+    } finally {
+      this.syncingSavedRecords = false;
+      if (!this.hasPendingRemoteSync()) {
+        this.clearSyncStateWhenComplete();
+      } else if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        this.offlineHandler();
+      } else if (retryRequired) {
+        this.scheduleSyncRetry();
+      }
+    }
+  }
+
+  private hasPendingRemoteSync(): boolean {
+    return this.savedRecords().some((record) => record.remoteStatus !== 'saved-remotely' && record.hasImage);
+  }
+
+  private scheduleSyncRetry(): void {
+    if (this.syncRetryTimer !== null || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+    this.syncRetryTimer = setTimeout(() => {
+      this.syncRetryTimer = null;
+      void this.syncSavedRecords();
+    }, this.syncRetryDelayMs);
+    this.syncRetryDelayMs = Math.min(this.syncRetryDelayMs * 2, MAX_SYNC_RETRY_DELAY_MS);
+  }
+
+  private cancelSyncRetry(): void {
+    if (this.syncRetryTimer === null) return;
+    clearTimeout(this.syncRetryTimer);
+    this.syncRetryTimer = null;
+  }
+
+  private clearSyncStateWhenComplete(): void {
+    if (this.hasPendingRemoteSync()) return;
+    this.cancelSyncRetry();
+    this.syncRetryDelayMs = INITIAL_SYNC_RETRY_DELAY_MS;
+    this.syncWarning.set(null);
+  }
+
+  private async loadStoredImage(id: string): Promise<Blob | null> {
+    if (typeof indexedDB === 'undefined') return null;
+    const database = await this.openSavedRecordsDatabase();
+    try {
+      return await new Promise<Blob | null>((resolve, reject) => {
+        const request = database.transaction('images', 'readonly').objectStore('images').get(id);
+        request.onsuccess = () => resolve((request.result as StoredImage | undefined)?.image ?? null);
+        request.onerror = () => reject(request.error);
+      });
+    } finally {
+      database.close();
+    }
+  }
+
+  private async ensureThumbnail(record: SavedRecord, image: Blob): Promise<Blob | null> {
+    if (record.thumbnail instanceof Blob) return record.thumbnail;
+    try {
+      const thumbnail = await this.createThumbnail(image);
+      await this.updateStoredRecord(record.id, (stored) => ({ ...stored, thumbnail }));
+      this.savedRecords.update((records) => records.map((current) => {
+        if (current.id !== record.id) return current;
+        if (current.thumbnailUrl) URL.revokeObjectURL(current.thumbnailUrl);
+        return { ...current, thumbnail, thumbnailUrl: URL.createObjectURL(thumbnail) };
+      }));
+      return thumbnail;
+    } catch {
+      return null;
+    }
+  }
+
+  private async markRecordSavedRemotely(id: string): Promise<void> {
+    await this.updateStoredRecord(id, (record) => ({ ...record, remoteStatus: 'saved-remotely' }));
+    this.savedRecords.update((records) => records.map((record) => record.id === id ? { ...record, remoteStatus: 'saved-remotely' } : record));
+  }
+
+  private async updateStoredRecord(id: string, update: (record: StoredRecord) => StoredRecord): Promise<void> {
+    const database = await this.openSavedRecordsDatabase();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction('records', 'readwrite');
+        const store = transaction.objectStore('records');
+        const request = store.get(id);
+        request.onsuccess = () => {
+          const record = request.result as StoredRecord | undefined;
+          if (!record) {
+            reject(new Error('The saved record no longer exists.'));
+            return;
+          }
+          store.put(update(record));
+        };
+        request.onerror = () => reject(request.error);
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+      });
+    } finally {
+      database.close();
+    }
   }
 
   private async prepareInitialCrop(image: Blob, selection: number): Promise<void> {
@@ -1298,7 +1450,7 @@ export class App {
     const scans: RawScan[] = [];
 
     for (const variant of variants) {
-      const pass = await this.createCropPass(image, crop, this.dataPlateOutputScale(scale), undefined, MAX_MANUAL_CROP_PIXELS, false, 0, 0, variant.preprocess);
+      const pass = await this.createCropPass(image, crop, this.dataPlateOutputScale(scale), undefined, MAX_MANUAL_CROP_PIXELS, variant.preprocess);
       try {
         const startedAt = performance.now();
         const detected = await this.detectWithRecovery(pass.url, recovery);
@@ -1362,7 +1514,7 @@ export class App {
       };
 
       for (const variant of preprocesses) {
-        const pass = await this.createCropPass(image, slotCrop, 10, undefined, MAX_CHECK_DIGIT_CROP_PIXELS, false, 0, 0, variant.preprocess);
+        const pass = await this.createCropPass(image, slotCrop, 10, undefined, MAX_CHECK_DIGIT_CROP_PIXELS, variant.preprocess);
         try {
           const startedAt = performance.now();
           const detected = await this.detectWithRecovery(pass.url, recovery);
@@ -1465,7 +1617,7 @@ export class App {
       gapCrop.height = Math.min(selectedCrop.y + selectedCrop.height, bottom / imageHeight) - gapCrop.y;
       if (gapCrop.width <= 0 || gapCrop.height <= 0) continue;
 
-      const pass = await this.createCropPass(image, gapCrop, 10, undefined, MAX_CHECK_DIGIT_CROP_PIXELS, false, 0, 0, 'contrast');
+        const pass = await this.createCropPass(image, gapCrop, 10, undefined, MAX_CHECK_DIGIT_CROP_PIXELS, 'contrast');
       try {
         const startedAt = performance.now();
         const detected = await this.detectWithRecovery(pass.url, recovery);
@@ -1545,33 +1697,21 @@ export class App {
 
   private async scanOcrPasses(image: Blob, recovery: { retried: boolean }): Promise<OcrLine[][]> {
     const manualCrop = this.cropRect();
-    const shouldUnwarp = Boolean(manualCrop && this.unwarpSelectedRegion());
     const definitions = manualCrop
       ? [
-        { label: 'Original size', crop: manualCrop, scale: 1, maximumPixels: MAX_MANUAL_CROP_PIXELS, unwarp: false, rotation: 0, curvature: 0 },
-         { label: shouldUnwarp ? 'Unwarped' : 'Enlarged', crop: manualCrop, scale: shouldUnwarp ? 1 : 2, maximumPixels: MAX_MANUAL_RETRY_CROP_PIXELS, unwarp: shouldUnwarp, rotation: this.unwarpRotation(), curvature: shouldUnwarp ? DEFAULT_AUTO_CURVATURE : 0 },
-         ...(shouldUnwarp ? [{ label: '2x unwarped', crop: manualCrop, scale: 2, maximumPixels: MAX_MANUAL_RETRY_CROP_PIXELS, unwarp: true, rotation: this.unwarpRotation(), curvature: DEFAULT_AUTO_CURVATURE }] : []),
-       ]
-      : [{ label: 'Full photo', crop: DEFAULT_CROP, scale: 1, maximumPixels: MAX_FULL_PHOTO_PIXELS, unwarp: false, rotation: 0, curvature: 0 }];
+        { label: 'Original size', crop: manualCrop, scale: 1, maximumPixels: MAX_MANUAL_CROP_PIXELS },
+        { label: 'Enlarged', crop: manualCrop, scale: 2, maximumPixels: MAX_MANUAL_RETRY_CROP_PIXELS },
+        ]
+      : [{ label: 'Full photo', crop: DEFAULT_CROP, scale: 1, maximumPixels: MAX_FULL_PHOTO_PIXELS }];
     const scanResults: OcrLine[][] = [];
 
     for (const [index, definition] of definitions.entries()) {
-      if (definition.unwarp && scanResults[0]?.length) {
-        const geometry = this.estimateUnwarpGeometry(scanResults[0]);
-        definition.rotation += geometry.rotation;
-        definition.curvature = geometry.reliable ? definition.curvature : 0;
-      }
       // Release each temporary OCR image before creating the next one.
-      const pass = await this.createCropPass(image, definition.crop, definition.scale, undefined, definition.maximumPixels, definition.unwarp, definition.rotation, definition.curvature);
-      let retainPass = false;
+      const pass = await this.createCropPass(image, definition.crop, definition.scale, undefined, definition.maximumPixels);
       try {
         this.status.set(`Scanning ${definition.label}${definitions.length > 1 ? ` (${index + 1} of ${definitions.length})` : ''}...`);
         const startedAt = performance.now();
         const detected = await this.detectWithRecovery(pass.url, recovery);
-        if (manualCrop && definition.unwarp && !this.unwarpedCropUrl()) {
-          this.unwarpedCropUrl.set(pass.url);
-          retainPass = true;
-        }
         const scan = detected.map((line) => ({
           ...line,
           box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
@@ -1585,43 +1725,17 @@ export class App {
             durationMs: Math.round(performance.now() - startedAt),
             pixelCount: pass.pixelCount,
           }]);
-         if (manualCrop && !shouldUnwarp && index === 0) {
+          if (manualCrop && index === 0) {
            if (!this.hasLowConfidence(this.extractFields(scan))) {
              break;
            }
          }
        } finally {
-        if (pass.revokeUrl && !retainPass) URL.revokeObjectURL(pass.url);
+         if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
       }
     }
 
     return scanResults;
-  }
-
-  private estimateUnwarpGeometry(lines: OcrLine[]): UnwarpGeometry {
-    const angles = lines
-      .filter((line) => line.mean >= 0.5 && line.box && line.box.length >= 4)
-      .map((line) => {
-        const box = line.box!;
-        let longest: number[][] = [];
-        for (let index = 0; index < box.length; index++) {
-          const edge = [box[index], box[(index + 1) % box.length]];
-          const longestWidth = longest.length === 2 ? Math.abs(longest[1][0] - longest[0][0]) : 0;
-          if (Math.abs(edge[1][0] - edge[0][0]) > longestWidth) longest = edge;
-        }
-        return Math.atan2(longest[1][1] - longest[0][1], longest[1][0] - longest[0][0]) * 180 / Math.PI;
-      })
-      .filter((angle) => Number.isFinite(angle) && Math.abs(angle) <= 20)
-      .sort((first, second) => first - second);
-    if (angles.length < 2) return { rotation: 0, curvature: 0, reliable: false };
-    const median = angles[Math.floor(angles.length / 2)];
-    return { rotation: Math.max(-10, Math.min(10, -median)), curvature: DEFAULT_AUTO_CURVATURE, reliable: true };
-  }
-
-  private clearUnwarpedCropPreview(): void {
-    const url = this.unwarpedCropUrl();
-    if (url) URL.revokeObjectURL(url);
-    this.unwarpedCropUrl.set(null);
   }
 
   private async runCheckDigitScan(crop = this.cropRect(), lines = this.selectedOcrLines()): Promise<void> {
@@ -2056,10 +2170,10 @@ export class App {
     };
   }
 
-  private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number, unwarp = false, rotation = 0, curvature = 0, preprocess: DataPlatePreprocess = 'original'): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean; pixelCount: number }> {
+  private async createCropPass(image: Blob, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number, preprocess: DataPlatePreprocess = 'original'): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean; pixelCount: number }> {
     const decodedImage = await this.decodeImage(image);
     try {
-      return await this.createCropPassFromSource(decodedImage.source, decodedImage.width, decodedImage.height, crop, scale, maximumWidth, maximumPixels, unwarp, rotation, curvature, preprocess);
+      return await this.createCropPassFromSource(decodedImage.source, decodedImage.width, decodedImage.height, crop, scale, maximumWidth, maximumPixels, preprocess);
     } finally {
       decodedImage.release();
     }
@@ -2086,7 +2200,7 @@ export class App {
     }
   }
 
-  private async createCropPassFromSource(source: CanvasImageSource, imageWidth: number, imageHeight: number, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number, unwarp = false, rotation = 0, curvature = 0, preprocess: DataPlatePreprocess = 'original'): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean; pixelCount: number }> {
+  private async createCropPassFromSource(source: CanvasImageSource, imageWidth: number, imageHeight: number, crop: CropRect, scale: number, maximumWidth?: number, maximumPixels?: number, preprocess: DataPlatePreprocess = 'original'): Promise<{ url: string; offsetX: number; offsetY: number; scale: number; revokeUrl: boolean; pixelCount: number }> {
     const sourceX = Math.round(crop.x * imageWidth);
     const sourceY = Math.round(crop.y * imageHeight);
     const sourceWidth = Math.max(1, Math.round(crop.width * imageWidth));
@@ -2094,9 +2208,8 @@ export class App {
     const outputScale = this.cropOutputScale(sourceWidth, sourceHeight, scale, maximumWidth, this.runtimeCropPixelBudget(maximumPixels));
     const baseWidth = Math.max(1, Math.round(sourceWidth * outputScale));
     const baseHeight = Math.max(1, Math.round(sourceHeight * outputScale));
-    const radians = unwarp ? rotation * Math.PI / 180 : 0;
-    const outputWidth = Math.max(1, Math.ceil(Math.abs(baseWidth * Math.cos(radians)) + Math.abs(baseHeight * Math.sin(radians))));
-    const outputHeight = Math.max(1, Math.ceil(Math.abs(baseWidth * Math.sin(radians)) + Math.abs(baseHeight * Math.cos(radians))));
+    const outputWidth = baseWidth;
+    const outputHeight = baseHeight;
     const canvas = document.createElement('canvas');
     try {
       canvas.width = outputWidth;
@@ -2104,12 +2217,8 @@ export class App {
       const context = canvas.getContext('2d');
       if (!context) throw new Error('Canvas 2D context is unavailable.');
       context.imageSmoothingEnabled = preprocess === 'original';
-      if (unwarp) {
-        this.drawCylindricalUnwarp(context, source, sourceX, sourceY, sourceWidth, sourceHeight, baseWidth, baseHeight, canvas.width, canvas.height, radians, curvature);
-      } else {
-        context.drawImage(source, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, baseWidth, baseHeight);
-      }
-      if (!unwarp && this.repairStrokes().length) {
+      context.drawImage(source, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, baseWidth, baseHeight);
+      if (this.repairStrokes().length) {
         this.drawRepairStrokesOnCrop(context, this.repairStrokes(), sourceX, sourceY, sourceWidth, sourceHeight, baseWidth, baseHeight, imageWidth, imageHeight);
       }
       this.preprocessDataPlateCanvas(context, outputWidth, outputHeight, preprocess);
@@ -2396,43 +2505,6 @@ export class App {
     const firstCenter = (first.bounds.top + first.bounds.bottom) / 2;
     const secondCenter = (second.bounds.top + second.bounds.bottom) / 2;
     return Math.abs(firstCenter - secondCenter) <= Math.min(firstHeight, secondHeight) * 0.5;
-  }
-
-  private drawCylindricalUnwarp(context: CanvasRenderingContext2D, source: CanvasImageSource, sourceX: number, sourceY: number, sourceWidth: number, sourceHeight: number, baseWidth: number, baseHeight: number, outputWidth: number, outputHeight: number, rotation: number, curvature: number): void {
-    // Approximate a vertical cylinder by mapping horizontal strips from the projected arc.
-    const halfAngle = (Math.PI / 2) * Math.min(0.9, Math.abs(curvature));
-    const edgeSin = Math.sin(halfAngle);
-    const segments = Math.min(CYLINDER_UNWARP_MAX_SEGMENTS, Math.max(32, Math.ceil(baseWidth / 8)));
-    const sourceAt = (outputX: number) => {
-      const normalized = outputX / baseWidth * 2 - 1;
-      if (Math.abs(curvature) < 0.001) return sourceX + ((normalized + 1) / 2) * sourceWidth;
-      const projected = Math.sin(normalized * halfAngle) / edgeSin;
-      return sourceX + ((projected + 1) / 2) * sourceWidth;
-    };
-
-    context.save();
-    context.translate(outputWidth / 2, outputHeight / 2);
-    context.rotate(rotation);
-    for (let segment = 0; segment < segments; segment++) {
-      const outputLeft = Math.round(segment * baseWidth / segments);
-      const outputRight = Math.round((segment + 1) * baseWidth / segments);
-      const sourceLeft = sourceAt(outputLeft);
-      const sourceRight = sourceAt(outputRight);
-      const normalized = ((outputLeft + outputRight) / 2) / baseWidth * 2 - 1;
-      const verticalShift = curvature * normalized * normalized * baseHeight * 0.08;
-      context.drawImage(
-        source,
-        sourceLeft,
-        sourceY,
-        Math.max(1, sourceRight - sourceLeft),
-        sourceHeight,
-        outputLeft - baseWidth / 2,
-        -baseHeight / 2 + verticalShift,
-        Math.max(1, outputRight - outputLeft),
-        outputHeight,
-      );
-    }
-    context.restore();
   }
 
   private cropOutputScale(sourceWidth: number, sourceHeight: number, requestedScale: number, maximumWidth?: number, maximumPixels?: number): number {

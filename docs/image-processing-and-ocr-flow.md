@@ -68,16 +68,6 @@ Both passes are processed sequentially. The temporary OCR image from one pass is
 
 For a manually selected engraved date marking known to use the `MM YY` format, the application also scans four fixed character slots independently at high scale. Common OCR letter-to-digit confusions are normalized, but a combined date is added only when the month is between `01` and `12` and all four digits are present. Each slot's raw OCR results remain visible even when no valid date can be synthesized.
 
-### Optional Cylindrical Unwarp
-
-For cylindrical containers, the user can enable **Unwarp** after selecting a crop. The optional rotation adjustment ranges from `-10` to `+10` degrees. The application then performs three sequential passes:
-
-1. **Original size**: the selected crop without unwarping.
-2. **Unwarped**: the selected crop transformed with the configured rotation and cylindrical curvature.
-3. **2x unwarped**: the same transformation at an enlarged scale, subject to the 4 MP and memory limits.
-
-The first pass estimates text-line geometry and supplies a bounded rotation correction when the estimate is reliable. The unwarped pass is retained as a temporary preview for diagnosis; it is not saved instead of the original photo.
-
 ## Auto Crop Mode
 
 After a photo is selected in Auto mode:
@@ -165,9 +155,10 @@ After OCR succeeds:
 - Structured container fields are extracted.
 - A whole-number confidence percentage, such as `95%`, is shown for each extracted field when OCR provides one. The status icon and unit remain in one table cell, while the right-aligned confidence percentage is rendered in the adjacent narrower cell without parentheses.
 - The user can edit the extracted fields.
-- The original image Blob is saved to IndexedDB when the user selects **Save on this device**.
+- The original image Blob is saved to the browser's database (IndexedDB) when the user selects **Save on this device**.
 - A separate 160-pixel JPEG thumbnail is generated for the saved-results list.
 - The JSON record stores the source filename, processing time, crop coordinates, extracted fields, raw OCR text, and warnings.
+- Saved records are written locally first, then synchronized oldest-first to the remote saved-results API when online. Each record shows whether it is remotely saved; failed uploads remain local and retry with exponential backoff, while offline uploads resume on the next `online` event.
 
 The resized OCR copies and temporary canvases are not used as the saved full photo.
 

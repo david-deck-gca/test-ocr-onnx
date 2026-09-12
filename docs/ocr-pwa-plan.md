@@ -2,9 +2,9 @@
 
 ## Current status
 
-The Angular 22 PWA shell is implemented. It supports camera capture, device image selection, automatic crop suggestions, manual rectangle crops with previews and saved normalized coordinates, optional cylindrical unwarping with rotation control, editable structured fields, ISO 6346 check-digit validation with targeted OCR recovery, same-row partial-ID detection, per-field confidence percentages, retained initial auto-crop OCR text, local saved records, and accessible technical diagnostics. Auto mode first scans the full photo to suggest a crop; manual mode waits for a user-selected crop. The user interface does not upload images.
+The Angular 22 PWA shell is implemented. It supports camera capture, device image selection, automatic crop suggestions, manual rectangle crops with previews and saved normalized coordinates, editable structured fields, ISO 6346 check-digit validation with targeted OCR recovery, same-row partial-ID detection, per-field confidence percentages, retained initial auto-crop OCR text, local saved records, remote saved-record synchronization, and accessible technical diagnostics. Auto mode first scans the full photo to suggest a crop; manual mode waits for a user-selected crop. Images and OCR records are stored locally in the browser database and uploaded in the background when the remote service is available.
 
-The current verification status is `84/84` unit tests passing and a successful production build on 2026-09-05.
+Remote synchronization is implemented with a local pending queue, oldest-first uploads, online/offline handling, exponential retry, and per-record remote status. Local records remain available when the service is unavailable.
 
 Browser OCR is provided by `@gutenye/ocr-browser`, an MIT-licensed browser implementation built on PaddleOCR and ONNX Runtime. The detector and recognizer sessions initialize during Angular application bootstrap. The package performs detector preprocessing, text-region extraction, recognition preprocessing, and CTC decoding on-device. OpenCV.js is shipped as a local static asset but is not yet used by the crop workflow. The UI reports initialization and inference failures with the original technical details.
 
@@ -26,7 +26,7 @@ One input image produces one JSON record. It includes source metadata, manual cr
 
 Engraved `MM YY` markings use a fixed four-slot OCR fallback during Data plate scans. The slots and any valid synthesized date are retained in raw OCR results; no new structured field is created yet.
 
-Saving a result writes the JSON payload, a 160px JPEG thumbnail, and the selected image `Blob` to the browser's IndexedDB `container-mark-reader` database. The saved-result list loads only record metadata and thumbnails; the full photo is loaded from a separate IndexedDB store only after the user selects `View photo`. Existing saved photos are migrated to that store, and records without a thumbnail remain readable with a placeholder.
+Saving a result writes the JSON payload, a 160px JPEG thumbnail, and the selected image `Blob` to the browser's IndexedDB `container-mark-reader` database. The saved-result list loads only record metadata and thumbnails; the full photo is loaded from a separate IndexedDB store only after the user selects `View photo`. Existing saved photos are migrated to that store, and records without a thumbnail remain readable with a placeholder. Pending records are posted to the configured saved-results API with JSON, the original image, and its thumbnail; successful uploads are marked remotely saved.
 
 The selected-image and selected-crop previews each retry failed Blob URL loads twice. OCR detection has a 45-second watchdog; after a failure or timeout, the app retries detection once using the already initialized OCR sessions before showing a diagnostic.
 

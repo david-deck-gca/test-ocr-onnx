@@ -387,7 +387,7 @@ describe('App', () => {
     }
   });
 
-  it('should block photo, provider, unwarp, and scan actions during auto-crop', () => {
+  it('should block photo, provider, and scan actions during auto-crop', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
       useImage(image: Blob, name: string): void;
@@ -505,33 +505,6 @@ describe('App', () => {
     }
   });
 
-  it('should retain cylindrical unwarping state for the selected region', () => {
-    const fixture = TestBed.createComponent(App);
-    const app = fixture.componentInstance as unknown as {
-      unwarpSelectedRegion: () => boolean;
-      setUnwarpSelectedRegion(enabled: boolean): void;
-      unwarpRotation: () => number;
-      setUnwarpRotation(degrees: number): void;
-      captureMode: { set(value: string): void };
-      useImage(image: Blob, name: string): void;
-    };
-    vi.stubGlobal('URL', { createObjectURL: vi.fn().mockReturnValue('blob:photo'), revokeObjectURL: vi.fn() });
-
-    try {
-      app.captureMode.set('manual-crop');
-      app.useImage(new Blob(['image'], { type: 'image/jpeg' }), 'container.jpg');
-      app.setUnwarpSelectedRegion(true);
-      app.setUnwarpRotation(3.5);
-      fixture.detectChanges();
-
-      expect(app.unwarpSelectedRegion()).toBe(true);
-      expect(app.unwarpRotation()).toBe(3.5);
-      expect((fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('.rotation-control input')?.value).toBe('3.5');
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
   it('should release each manual OCR pass before creating the next one', async () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -561,8 +534,8 @@ describe('App', () => {
       expect(events.indexOf('revoke:blob:first')).toBeLessThan(events.indexOf('create:second'));
       expect(revokeObjectUrl).toHaveBeenCalledWith('blob:first');
       expect(revokeObjectUrl).toHaveBeenCalledWith('blob:second');
-      expect(app.createCropPass).toHaveBeenNthCalledWith(1, expect.anything(), expect.anything(), 1, undefined, 4_000_000, false, 0, 0);
-    expect(app.createCropPass).toHaveBeenNthCalledWith(2, expect.anything(), { x: 0.1, y: 0.1, width: 0.8, height: 0.8 }, 2, undefined, 4_000_000, false, 0, 0);
+      expect(app.createCropPass).toHaveBeenNthCalledWith(1, expect.anything(), expect.anything(), 1, undefined, 4_000_000);
+    expect(app.createCropPass).toHaveBeenNthCalledWith(2, expect.anything(), { x: 0.1, y: 0.1, width: 0.8, height: 0.8 }, 2, undefined, 4_000_000);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -738,6 +711,57 @@ describe('App', () => {
     fixture.detectChanges();
 
     expect((fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.delete-all-button')?.disabled).toBe(true);
+  });
+
+  it('should warn when unsynced saved results cannot upload while offline', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      savedRecords: { set(value: Array<{ id: string; savedAt: string; payload: unknown; hasImage: boolean; remoteStatus: 'not-saved-remotely'; thumbnailUrl: null }>): void };
+      syncWarning: { set(value: 'offline' | 'remote-unavailable' | null): void };
+    };
+    app.savedRecords.set([{ id: 'record-1', savedAt: '2026-08-24T10:00:00.000Z', payload: {}, hasImage: true, remoteStatus: 'not-saved-remotely', thumbnailUrl: null }]);
+    app.syncWarning.set('offline');
+    fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).querySelector('.sync-warning')?.textContent).toContain('You’re offline. Saved results will upload when your internet connection is restored.');
+  });
+
+  it('should upload pending saved results from oldest to newest', async () => {
+    const fixture = TestBed.createComponent(App);
+    type TestRecord = {
+      id: string;
+      savedAt: string;
+      payload: unknown;
+      thumbnail: Blob;
+      hasImage: boolean;
+      remoteStatus: 'not-saved-remotely' | 'saved-remotely';
+      thumbnailUrl: null;
+    };
+    const app = fixture.componentInstance as unknown as {
+      savedRecords: { set(value: TestRecord[]): void; update(updater: (records: TestRecord[]) => TestRecord[]): void };
+      loadStoredImage(id: string): Promise<Blob>;
+      markRecordSavedRemotely(id: string): Promise<void>;
+      syncSavedRecords(): Promise<void>;
+    };
+    const thumbnail = new Blob(['thumbnail'], { type: 'image/jpeg' });
+    app.savedRecords.set([
+      { id: 'newer', savedAt: '2026-08-24T11:00:00.000Z', payload: {}, thumbnail, hasImage: true, remoteStatus: 'not-saved-remotely', thumbnailUrl: null },
+      { id: 'older', savedAt: '2026-08-24T10:00:00.000Z', payload: {}, thumbnail, hasImage: true, remoteStatus: 'not-saved-remotely', thumbnailUrl: null },
+    ]);
+    app.loadStoredImage = vi.fn().mockResolvedValue(new Blob(['image'], { type: 'image/jpeg' }));
+    app.markRecordSavedRemotely = vi.fn().mockImplementation(async (id: string) => {
+      app.savedRecords.update((records) => records.map((record) => record.id === id ? { ...record, remoteStatus: 'saved-remotely' } : record));
+    });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      await app.syncSavedRecords();
+
+      expect(fetchMock.mock.calls.map(([, options]) => ((options as RequestInit).body as FormData).get('clientRecordId'))).toEqual(['older', 'newer']);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('should render raw text grouped by OCR scan', () => {
@@ -1052,27 +1076,6 @@ describe('App', () => {
     expect(retryScale).toBeGreaterThanOrEqual(originalScale);
   });
 
-  it('should display the retained unwarped crop above selected-region raw text', () => {
-    const fixture = TestBed.createComponent(App);
-    const app = fixture.componentInstance as unknown as {
-      unwarpedCropUrl: { set(value: string | null): void };
-      unwarpSelectedRegion: { set(value: boolean): void };
-      cropRect: { set(value: { x: number; y: number; width: number; height: number } | null): void };
-      analysisSuccessful: { set(value: boolean): void };
-    };
-    app.cropRect.set({ x: 0.1, y: 0.2, width: 0.7, height: 0.3 });
-    app.analysisSuccessful.set(true);
-    app.unwarpSelectedRegion.set(true);
-    app.unwarpedCropUrl.set('blob:unwarped');
-    fixture.detectChanges();
-
-    const results = (fixture.nativeElement as HTMLElement).querySelector('.results')!;
-    const preview = results.querySelector<HTMLImageElement>('.unwarped-preview img');
-    expect(preview?.src).toContain('blob:unwarped');
-    expect(preview?.alt).toBe('Unwarped selected crop used for OCR');
-    expect(results.querySelector('.unwarped-preview')!.compareDocumentPosition(results.querySelector('.raw-text')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-
   it('should display the targeted check-digit preview above raw text', () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -1084,9 +1087,9 @@ describe('App', () => {
     fixture.detectChanges();
 
     const results = (fixture.nativeElement as HTMLElement).querySelector('.results')!;
-    expect(results.querySelector<HTMLImageElement>('.unwarped-preview img')?.src).toContain('blob:check-digit');
-    expect(results.querySelector('.unwarped-preview')!.textContent).toContain('Targeted check-digit region');
-    expect(results.querySelector('.unwarped-preview')!.compareDocumentPosition(results.querySelector('.raw-text')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(results.querySelector<HTMLImageElement>('.check-digit-preview img')?.src).toContain('blob:check-digit');
+    expect(results.querySelector('.check-digit-preview')!.textContent).toContain('Targeted check-digit region');
+    expect(results.querySelector('.check-digit-preview')!.compareDocumentPosition(results.querySelector('.raw-text')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('should identify browser memory failures while processing OCR', () => {
