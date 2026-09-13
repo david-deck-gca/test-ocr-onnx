@@ -31,10 +31,12 @@ describe('App', () => {
 
     expect(photoButtons.map((button) => button.textContent?.trim())).toEqual(['New', 'Existing']);
     expect(compiled.querySelector('.photo-actions > span')?.textContent?.trim()).toBe('Photo:');
-    expect(compiled.querySelector('.capture-controls')?.children).toHaveLength(4);
+     expect(compiled.querySelector('.capture-controls')?.children).toHaveLength(5);
     expect(compiled.querySelectorAll('.select-control')).toHaveLength(3);
     expect((compiled.querySelectorAll('.select-control select')[0] as HTMLSelectElement).value).toBe('auto-crop');
-    expect(compiled.querySelector('.empty-preview button')).toBeNull();
+     expect(compiled.querySelector('.empty-preview button')).toBeNull();
+     expect(compiled.querySelector('.data-plate-toggle')?.textContent?.trim()).toBe('Data plate');
+     expect(compiled.querySelector('.data-plate-toggle')?.getAttribute('aria-pressed')).toBe('false');
     expect(compiled.querySelector('.source-actions')).toBeNull();
   });
 
@@ -361,8 +363,28 @@ describe('App', () => {
       fixture.detectChanges();
 
       const controls = Array.from((fixture.nativeElement as HTMLElement).querySelector('.capture-controls')!.children);
-      expect(controls.map((control) => control.className)).toEqual(['photo-actions', 'select-control compact-control', 'select-control data-plate-control', 'select-control compact-control']);
+       expect(controls.map((control) => control.className)).toEqual(['photo-actions', 'select-control compact-control', 'select-control data-plate-control', 'select-control compact-control', 'capture-mode-button data-plate-toggle']);
       expect((controls[1].querySelector('select') as HTMLSelectElement).value).toBe('auto-crop');
+    } finally {
+      vi.unstubAllGlobals();
+     }
+   });
+
+  it('should launch the data-plate process when the toggle is enabled before image selection', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      dataPlateMode: { set(value: boolean): void };
+      useImage(image: Blob, name: string): void;
+      startDataPlateProcess: ReturnType<typeof vi.fn>;
+    };
+    vi.stubGlobal('URL', { createObjectURL: vi.fn().mockReturnValue('blob:data-plate'), revokeObjectURL: vi.fn() });
+    app.dataPlateMode.set(true);
+    app.startDataPlateProcess = vi.fn().mockResolvedValue(undefined);
+
+    try {
+      app.useImage(new Blob(['image'], { type: 'image/jpeg' }), 'plate.jpg');
+      await fixture.whenStable();
+      expect(app.startDataPlateProcess).toHaveBeenCalledTimes(1);
     } finally {
       vi.unstubAllGlobals();
     }

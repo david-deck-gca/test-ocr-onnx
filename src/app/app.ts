@@ -15,10 +15,26 @@ type RepairTool = 'freehand' | 'line';
 type RepairColor = 'dark' | 'light';
 type RepairPoint = { x: number; y: number };
 type RepairStroke = { tool: RepairTool; color: RepairColor; width: number; points: RepairPoint[] };
-type OpenCvMat = { data: Uint8Array; rows: number; cols: number; delete: () => void };
+type OpenCvMat = { data: Uint8Array; data32F?: Float32Array; rows: number; cols: number; delete: () => void };
+type OpenCvMatVector = { size: () => number; get: (index: number) => OpenCvMat; delete: () => void };
 type OpenCvClahe = { apply: (source: OpenCvMat, destination: OpenCvMat) => void; delete: () => void };
 type OpenCvApi = {
   COLOR_RGBA2GRAY: number;
+  RETR_EXTERNAL?: number;
+  CHAIN_APPROX_SIMPLE?: number;
+  CV_32FC2?: number;
+  BORDER_DEFAULT?: number;
+  Canny?: (source: OpenCvMat, destination: OpenCvMat, threshold1: number, threshold2: number) => void;
+  GaussianBlur?: (source: OpenCvMat, destination: OpenCvMat, size: unknown, sigmaX: number, sigmaY: number, borderType?: number) => void;
+  MatVector?: new () => OpenCvMatVector;
+  matFromArray?: (rows: number, cols: number, type: number, data: number[]) => OpenCvMat;
+  findContours?: (image: OpenCvMat, contours: OpenCvMatVector, hierarchy: OpenCvMat, mode: number, method: number) => void;
+  contourArea?: (contour: OpenCvMat) => number;
+  arcLength?: (curve: OpenCvMat, closed: boolean) => number;
+  approxPolyDP?: (curve: OpenCvMat, approxCurve: OpenCvMat, epsilon: number, closed: boolean) => void;
+  getPerspectiveTransform?: (source: OpenCvMat, destination: OpenCvMat) => OpenCvMat;
+  warpPerspective?: (source: OpenCvMat, destination: OpenCvMat, transform: OpenCvMat, size: unknown, flags?: number) => void;
+  imshow?: (canvas: HTMLCanvasElement, image: OpenCvMat) => void;
   Mat: new () => OpenCvMat;
   Size: new (width: number, height: number) => unknown;
   CLAHE?: new (clipLimit: number, tileGridSize: unknown) => OpenCvClahe;
@@ -93,6 +109,7 @@ export class App {
   protected readonly repairStrokes = signal<RepairStroke[]>([]);
   protected readonly cropResizeHandles: CropResizeHandle[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
   protected readonly captureMode = signal<CaptureMode>(defaultCaptureMode());
+  protected readonly dataPlateMode = signal(false);
   protected readonly dataPlateScale = signal<DataPlateScale | null>(null);
   protected readonly manualCropDrawn = signal(false);
   protected readonly cameraOpen = signal(false);
@@ -632,6 +649,25 @@ export class App {
     this.cropRect.set(null);
     this.cropDraft.set(DEFAULT_CROP);
     await this.prepareInitialCrop(image, this.imageSelection);
+  }
+
+  protected async toggleDataPlateMode(): Promise<void> {
+    if (this.processing() || this.applyingCrop()) return;
+    const enabled = !this.dataPlateMode();
+    this.dataPlateMode.set(enabled);
+    if (!enabled) {
+      this.dataPlateScale.set(null);
+      this.captureMode.set('auto-crop');
+      this.manualCropDrawn.set(false);
+      this.cropRect.set(null);
+      this.cropDraft.set(DEFAULT_CROP);
+      this.clearFields();
+      this.status.set(this.hasImage() ? 'Standard container OCR mode selected.' : 'Choose a container image to begin.');
+      return;
+    }
+
+    const image = this.imageBlob();
+    if (image) await this.startDataPlateProcess(image, this.imageSelection);
   }
 
   protected setDataPlateScale(value: string): void {
@@ -1197,11 +1233,155 @@ export class App {
     this.rawScans.set([]);
     this.rawScansCollapsed.set(false);
     const selection = ++this.imageSelection;
+    if (this.dataPlateMode()) {
+      void this.startDataPlateProcess(image, selection);
+      return;
+    }
     if (this.captureMode() === 'manual-crop') {
       this.status.set('Draw a crop around the ID and markings, then use the selected region to run OCR.');
       return;
     }
     void this.prepareInitialCrop(image, selection);
+  }
+
+  private async startDataPlateProcess(image: Blob, selection: number): Promise<void> {
+    try {
+      const rectified = await this.rectifyDataPlateImage(image);
+      if (rectified !== image && selection === this.imageSelection) {
+        const previousUrl = this.previewUrl();
+        if (previousUrl) URL.revokeObjectURL(previousUrl);
+        this.imageBlob.set(rectified);
+        this.previewUrl.set(URL.createObjectURL(rectified));
+        this.status.set('Plate perspective corrected. Splitting the engraved areas for OCR...');
+        image = rectified;
+      }
+    } catch (error: unknown) {
+      this.addDiagnostic('Data plate geometry', 'The plate could not be perspective-corrected. Continuing with the original image.', this.errorMessage(error));
+    }
+    this.dataPlateScale.set('original');
+    this.captureMode.set('manual-crop');
+    this.manualCropDrawn.set(true);
+    this.cropRect.set(DEFAULT_CROP);
+    this.cropDraft.set(DEFAULT_CROP);
+    this.clearFields();
+    this.status.set('Preparing the data plate for perspective-aware OCR...');
+    await this.processImageForSelection(image, selection);
+  }
+
+  private async processImageForSelection(image: Blob, selection: number): Promise<void> {
+    await this.waitForPreviewImage(selection).catch(() => undefined);
+    if (selection !== this.imageSelection || this.imageBlob() !== image || !this.dataPlateMode()) return;
+    await this.processImage();
+  }
+
+  private async rectifyDataPlateImage(image: Blob): Promise<Blob> {
+    const openCv = (globalThis as typeof globalThis & { cv?: OpenCvApi }).cv;
+    if (!openCv?.matFromImageData || !openCv.MatVector || !openCv.findContours || !openCv.approxPolyDP
+      || !openCv.getPerspectiveTransform || !openCv.warpPerspective || !openCv.imshow) return image;
+    const decoded = await this.decodeImage(image);
+    const canvas = document.createElement('canvas');
+    let source: OpenCvMat | null = null;
+    const gray = new openCv.Mat();
+    const blurred = new openCv.Mat();
+    const edges = new openCv.Mat();
+    const contours = new openCv.MatVector();
+    const hierarchy = new openCv.Mat();
+    let best: number[][] | null = null;
+    try {
+      const scale = Math.min(1, 1200 / Math.max(decoded.width, decoded.height));
+      canvas.width = Math.max(1, Math.round(decoded.width * scale));
+      canvas.height = Math.max(1, Math.round(decoded.height * scale));
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) return image;
+      context.drawImage(decoded.source, 0, 0, canvas.width, canvas.height);
+      const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+      source = openCv.matFromImageData(imageData);
+      if (!source) return image;
+      openCv.cvtColor(source, gray, openCv.COLOR_RGBA2GRAY);
+      openCv.GaussianBlur?.(gray, blurred, new openCv.Size(5, 5), 0, 0, openCv.BORDER_DEFAULT);
+      openCv.Canny?.(blurred, edges, 40, 140);
+      openCv.findContours(edges, contours, hierarchy, openCv.RETR_EXTERNAL ?? 0, openCv.CHAIN_APPROX_SIMPLE ?? 2);
+      for (let index = 0; index < contours.size(); index++) {
+        const contour = contours.get(index);
+        const approximation = new openCv.Mat();
+        try {
+          const perimeter = openCv.arcLength?.(contour, true) ?? 0;
+          openCv.approxPolyDP(contour, approximation, perimeter * 0.03, true);
+          if (approximation.rows !== 4 || approximation.cols < 4) continue;
+          const area = Math.abs(openCv.contourArea?.(contour) ?? 0);
+          if (area < canvas.width * canvas.height * 0.12) continue;
+          const points = this.openCvPoints(approximation);
+          if (points.length === 4 && (!best || area > this.quadrilateralArea(best))) best = points;
+        } finally {
+          approximation.delete();
+          contour.delete();
+        }
+      }
+      if (!best) return image;
+      const ordered = this.orderQuadrilateral(best);
+      const width = Math.max(this.distance(ordered[0], ordered[1]), this.distance(ordered[2], ordered[3]));
+      const height = Math.max(this.distance(ordered[0], ordered[3]), this.distance(ordered[1], ordered[2]));
+      const outputWidth = Math.max(1, Math.round(width));
+      const outputHeight = Math.max(1, Math.round(height));
+      const destination = openCv.matFromArray?.(4, 1, openCv.CV_32FC2 ?? 13, [0, 0, outputWidth - 1, 0, outputWidth - 1, outputHeight - 1, 0, outputHeight - 1]);
+      const input = openCv.matFromArray?.(4, 1, openCv.CV_32FC2 ?? 13, ordered.flat());
+      if (!destination || !input) return image;
+      const transform = openCv.getPerspectiveTransform(input, destination);
+      const warped = new openCv.Mat();
+      const outputCanvas = document.createElement('canvas');
+      outputCanvas.width = outputWidth;
+      outputCanvas.height = outputHeight;
+      try {
+        openCv.warpPerspective(source, warped, transform, new openCv.Size(outputWidth, outputHeight));
+        openCv.imshow(outputCanvas, warped);
+        const result = await new Promise<Blob | null>((resolve) => outputCanvas.toBlob(resolve, 'image/jpeg', 0.92));
+        if (!result) return image;
+        return result;
+      } finally {
+        outputCanvas.width = 0;
+        outputCanvas.height = 0;
+        warped.delete();
+        transform.delete();
+        input.delete();
+        destination.delete();
+      }
+    } finally {
+      canvas.width = 0;
+      canvas.height = 0;
+      source?.delete();
+      gray.delete();
+      blurred.delete();
+      edges.delete();
+      contours.delete();
+      hierarchy.delete();
+      decoded.release();
+    }
+  }
+
+  private openCvPoints(mat: OpenCvMat): number[][] {
+    const values = mat.data32F ? Array.from(mat.data32F) : Array.from(mat.data);
+    const points: number[][] = [];
+    for (let index = 0; index + 1 < values.length && points.length < 4; index += 2) {
+      points.push([values[index], values[index + 1]]);
+    }
+    return points;
+  }
+
+  private quadrilateralArea(points: number[][]): number {
+    return Math.abs(points.reduce((area, point, index) => {
+      const next = points[(index + 1) % points.length];
+      return area + point[0] * next[1] - next[0] * point[1];
+    }, 0) / 2);
+  }
+
+  private orderQuadrilateral(points: number[][]): number[][] {
+    const bySum = [...points].sort((first, second) => first[0] + first[1] - second[0] - second[1]);
+    const byDifference = [...points].sort((first, second) => first[0] - first[1] - (second[0] - second[1]));
+    return [bySum[0], byDifference[0], bySum[3], byDifference[3]];
+  }
+
+  private distance(first: number[], second: number[]): number {
+    return Math.hypot(first[0] - second[0], first[1] - second[1]);
   }
 
   private clearFields(): void {
@@ -1614,25 +1794,28 @@ export class App {
     ];
     const allLines: OcrLine[] = [];
     const scans: RawScan[] = [];
+    const regions = await this.detectDataPlateRegions(image, crop);
 
-    for (const variant of variants) {
-      const pass = await this.createCropPass(image, crop, this.dataPlateOutputScale(scale), undefined, MAX_MANUAL_CROP_PIXELS, variant.preprocess);
-      try {
-        const startedAt = performance.now();
-        const detected = await this.detectWithRecovery(pass.url, recovery);
-        const lines = detected.map((line) => ({
-          ...line,
-          box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
-        }));
-        allLines.push(...lines);
-        scans.push({
-          label: variant.label,
-          lines: lines.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
-          durationMs: Math.round(performance.now() - startedAt),
-          pixelCount: pass.pixelCount,
-        });
-      } finally {
-        if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
+    for (const [regionIndex, region] of regions.entries()) {
+      for (const variant of variants) {
+        const pass = await this.createCropPass(image, region, this.dataPlateOutputScale(scale), undefined, MAX_MANUAL_CROP_PIXELS, variant.preprocess);
+        try {
+          const startedAt = performance.now();
+          const detected = await this.detectWithRecovery(pass.url, recovery);
+          const lines = detected.map((line) => ({
+            ...line,
+            box: line.box?.map(([x, y]) => [x / pass.scale + pass.offsetX, y / pass.scale + pass.offsetY]),
+          }));
+          allLines.push(...lines);
+          scans.push({
+            label: regions.length === 1 ? variant.label : `Data plate area ${regionIndex + 1} (${variant.label})`,
+            lines: lines.map((line) => ({ text: line.text, confidence: Math.round(line.mean * 100) })),
+            durationMs: Math.round(performance.now() - startedAt),
+            pixelCount: pass.pixelCount,
+          });
+        } finally {
+          if (pass.revokeUrl) URL.revokeObjectURL(pass.url);
+        }
       }
     }
 
@@ -1651,6 +1834,87 @@ export class App {
       ? scans.map((scan) => ({ ...scan, label: `${scan.label} (manual repair)` }))
       : scans);
     return lines;
+  }
+
+  private async detectDataPlateRegions(image: Blob, crop: CropRect): Promise<CropRect[]> {
+    const decoded = await this.decodeImage(image);
+    const canvas = document.createElement('canvas');
+    try {
+      const sourceWidth = Math.max(1, Math.round(crop.width * decoded.width));
+      const sourceHeight = Math.max(1, Math.round(crop.height * decoded.height));
+      const scale = Math.min(1, 1000 / Math.max(sourceWidth, sourceHeight));
+      const width = Math.max(1, Math.round(sourceWidth * scale));
+      const height = Math.max(1, Math.round(sourceHeight * scale));
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) return [crop];
+      context.drawImage(decoded.source, crop.x * decoded.width, crop.y * decoded.height, sourceWidth, sourceHeight, 0, 0, width, height);
+      const pixels = context.getImageData(0, 0, width, height).data;
+      const luma = new Uint8Array(width * height);
+      for (let index = 0; index < luma.length; index++) {
+        const pixel = index * 4;
+        luma[index] = Math.round(pixels[pixel] * 0.299 + pixels[pixel + 1] * 0.587 + pixels[pixel + 2] * 0.114);
+      }
+      const vertical = this.separatorPeaks(luma, width, height, true);
+      const horizontal = this.separatorPeaks(luma, width, height, false);
+      if (!vertical.length && !horizontal.length) return [crop];
+      const xBounds = [0, ...vertical, 1];
+      const yBounds = [0, ...horizontal, 1];
+      const regions: CropRect[] = [];
+      for (let row = 0; row < yBounds.length - 1; row++) {
+        for (let column = 0; column < xBounds.length - 1; column++) {
+          const left = xBounds[column];
+          const right = xBounds[column + 1];
+          const top = yBounds[row];
+          const bottom = yBounds[row + 1];
+          if (right - left < 0.08 || bottom - top < 0.08) continue;
+          const paddingX = Math.min(0.015, (right - left) * 0.08);
+          const paddingY = Math.min(0.015, (bottom - top) * 0.08);
+          regions.push({
+            x: crop.x + crop.width * (left + paddingX),
+            y: crop.y + crop.height * (top + paddingY),
+            width: crop.width * (right - left - paddingX * 2),
+            height: crop.height * (bottom - top - paddingY * 2),
+          });
+        }
+      }
+      return regions.length > 1 && regions.length <= 12 ? regions : [crop];
+    } finally {
+      canvas.width = 0;
+      canvas.height = 0;
+      decoded.release();
+    }
+  }
+
+  private separatorPeaks(luma: Uint8Array, width: number, height: number, vertical: boolean): number[] {
+    const length = vertical ? width : height;
+    const span = vertical ? height : width;
+    const scores = new Array<number>(length).fill(0);
+    for (let position = 1; position < length - 1; position++) {
+      let total = 0;
+      for (let offset = 0; offset < span; offset++) {
+        const first = vertical ? luma[offset * width + position - 1] : luma[(position - 1) * width + offset];
+        const second = vertical ? luma[offset * width + position] : luma[position * width + offset];
+        total += Math.abs(second - first);
+      }
+      scores[position] = total / span;
+    }
+    const usable = scores.slice(Math.round(length * 0.08), Math.round(length * 0.92));
+    const mean = usable.reduce((sum, value) => sum + value, 0) / Math.max(1, usable.length);
+    const deviation = Math.sqrt(usable.reduce((sum, value) => sum + (value - mean) ** 2, 0) / Math.max(1, usable.length));
+    const minimum = mean + Math.max(5, deviation * 1.8);
+    const candidates = scores
+      .map((score, position) => ({ score, position }))
+      .filter(({ score, position }) => score >= minimum && position > length * 0.08 && position < length * 0.92)
+      .sort((first, second) => second.score - first.score);
+    const selected: number[] = [];
+    const minimumDistance = length * 0.08;
+    for (const candidate of candidates) {
+      if (selected.every((position) => Math.abs(position - candidate.position) >= minimumDistance)) selected.push(candidate.position);
+      if (selected.length === 3) break;
+    }
+    return selected.sort((first, second) => first - second).map((position) => position / length);
   }
 
   private async scanEngravedMonthYear(image: Blob, selectedCrop: CropRect, recovery: { retried: boolean }): Promise<{ lines: OcrLine[]; scans: RawScan[] }> {
