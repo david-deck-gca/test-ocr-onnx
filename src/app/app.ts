@@ -48,6 +48,8 @@ const INITIAL_SYNC_RETRY_DELAY_MS = 10_000;
 const MAX_SYNC_RETRY_DELAY_MS = 60_000;
 const CAMERA_ALIGNMENT_WARNING_DEGREES = 3;
 const CAMERA_ALIGNMENT_SAMPLE_MS = 150;
+const CAMERA_ROTATION_MIN_DEGREES = 0.5;
+const CAMERA_ROTATION_MAX_DEGREES = 10;
 
 function defaultCaptureMode(): CaptureMode {
   return 'auto-crop';
@@ -80,6 +82,7 @@ export class App {
   protected readonly previewUrl = signal<string | null>(null);
   protected readonly checkDigitPreviewUrl = signal<string | null>(null);
   protected readonly imageBlob = signal<Blob | null>(null);
+  private readonly originalImageBlob = signal<Blob | null>(null);
   protected readonly cropRect = signal<CropRect | null>(null);
   protected readonly cropDraft = signal<CropRect>(DEFAULT_CROP);
   protected readonly applyingCrop = signal(false);
@@ -463,14 +466,47 @@ export class App {
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     canvas.getContext('2d')?.drawImage(video, 0, 0);
-    canvas.toBlob((blob) => {
+    canvas.toBlob(async (blob) => {
       if (!blob) {
         this.addDiagnostic('Camera', 'The photo could not be created from the camera preview.');
         return;
       }
-      this.useImage(blob, `container-${new Date().toISOString().replaceAll(':', '-')}.jpg`);
+      const angle = this.cameraAlignmentAngle();
+      const correction = angle !== null && Math.abs(angle) >= CAMERA_ROTATION_MIN_DEGREES && Math.abs(angle) <= CAMERA_ROTATION_MAX_DEGREES ? -angle : 0;
+      if (angle !== null && Math.abs(angle) > CAMERA_ROTATION_MAX_DEGREES) {
+        this.addDiagnostic('Camera alignment', `The image is tilted by about ${Math.abs(angle)}°. Automatic rotation is limited to ${CAMERA_ROTATION_MAX_DEGREES}°; review the crop before scanning.`);
+      }
+      try {
+        const workingImage = correction === 0 ? blob : await this.rotateCameraImage(canvas, correction);
+        this.useImage(workingImage, `container-${new Date().toISOString().replaceAll(':', '-')}.jpg`, blob);
+        if (correction !== 0) this.status.set(`Captured image rotated by ${Math.abs(correction)}° for OCR. Review the crop before scanning.`);
+      } catch (error: unknown) {
+        this.addDiagnostic('Camera alignment', 'The captured image could not be rotation-corrected. The original image is still available for OCR.', this.errorMessage(error));
+        this.useImage(blob, `container-${new Date().toISOString().replaceAll(':', '-')}.jpg`, blob);
+      }
       this.closeCamera();
     }, 'image/jpeg', 0.92);
+  }
+
+  private async rotateCameraImage(source: HTMLCanvasElement, angle: number): Promise<Blob> {
+    const radians = angle * Math.PI / 180;
+    const sine = Math.abs(Math.sin(radians));
+    const cosine = Math.abs(Math.cos(radians));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(source.width * cosine + source.height * sine);
+    canvas.height = Math.ceil(source.width * sine + source.height * cosine);
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('The rotation canvas could not be created.');
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.translate(canvas.width / 2, canvas.height / 2);
+    context.rotate(radians);
+    context.drawImage(source, -source.width / 2, -source.height / 2);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
+    canvas.width = 0;
+    canvas.height = 0;
+    if (!blob) throw new Error('The rotation image could not be encoded.');
+    return blob;
   }
 
   protected closeCamera(): void {
@@ -984,7 +1020,7 @@ export class App {
   }
 
   protected async saveJsonToIndexedDb(): Promise<void> {
-    const image = this.imageBlob();
+    const image = this.originalImageBlob() ?? this.imageBlob();
     if (!image) {
       this.addDiagnostic('IndexedDB', 'Choose or capture an image before saving a record.');
       return;
@@ -1137,13 +1173,14 @@ export class App {
     }
   }
 
-  private useImage(image: Blob, name: string): void {
+  private useImage(image: Blob, name: string, originalImage = image): void {
     this.cancelPreviewLoad(new Error('A different image was selected.'));
     const current = this.previewUrl();
     if (current) {
       URL.revokeObjectURL(current);
     }
     this.imageBlob.set(image);
+    this.originalImageBlob.set(originalImage);
     this.previewUrl.set(URL.createObjectURL(image));
     this.previewRetries = 0;
     this.sourceName.set(name);

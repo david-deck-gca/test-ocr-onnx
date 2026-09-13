@@ -18,7 +18,7 @@ The application is intended to run in a browser with camera access and local sto
 
 Browser OCR is provided by `@gutenye/ocr-browser`, an MIT-licensed browser implementation built on PaddleOCR and ONNX Runtime. Detector and recognizer sessions initialize during Angular application bootstrap. The package performs detector preprocessing, text-region extraction, recognition preprocessing, and CTC decoding on-device.
 
-OpenCV.js is shipped as a local static asset but is not currently used by the crop workflow. The UI reports initialization and inference failures with the original technical details.
+OpenCV.js is shipped as a local static asset and is used for CLAHE image preprocessing when available. A local browser implementation is used as a fallback when OpenCV.js is unavailable. The UI reports initialization and inference failures with the original technical details.
 
 The active browser model bundle comes from the `@gutenye/ocr-models` npm package and is copied into the Angular build at:
 
@@ -54,7 +54,7 @@ The camera preview provides advisory roll guidance. It combines:
 - Device orientation as a fallback when visual evidence is insufficient.
 - Screen-orientation normalization for portrait, landscape, and upside-down device orientations.
 
-The capture button remains enabled when the camera is tilted. A warning is shown when the estimated roll exceeds approximately 3 degrees. No post-capture rotation or perspective correction is currently applied.
+The capture button remains enabled when the camera is tilted. A warning is shown when the estimated roll exceeds approximately 3 degrees. Captures with a reliable roll between 0.5 and 10 degrees are automatically rotated for the OCR working image. The corrected working image is used for the preview, crop selection, and OCR; the original camera image remains unchanged for saving and synchronization. Perspective correction is not currently applied.
 
 ## Crop Modes
 
@@ -125,7 +125,7 @@ The application does not use a device-wide free-memory API. If the browser expos
 
 For each OCR pass, the application:
 
-1. Decodes the original image using `ImageBitmap` when available.
+1. Decodes the OCR working image using `ImageBitmap` when available. For camera captures, this is the rotation-corrected image; for selected files, it is the selected image.
 2. Falls back to an HTML image element if `ImageBitmap` decoding fails.
 3. Draws the required crop and scale onto a temporary canvas.
 4. Encodes the canvas as a temporary PNG `Blob`.
@@ -185,7 +185,7 @@ For UN tanks, the first two OCR rows matching `number KG / number letters` are i
 
 Engraved `MM YY` markings use a fixed four-slot OCR fallback during Data plate scans. The slots and any valid synthesized date are retained in raw OCR results; no new structured field is created yet.
 
-Saving a result writes the JSON payload, a 160px JPEG thumbnail, and the selected image `Blob` to the browser's IndexedDB `container-mark-reader` database. The saved-result list loads only record metadata and thumbnails; the full photo is loaded from a separate IndexedDB store only after the user selects **View photo**.
+Saving a result writes the JSON payload, a 160px JPEG thumbnail, and the original image `Blob` to the browser's IndexedDB `container-mark-reader` database. For camera captures, the rotation-corrected working image is not saved as the full photo. The saved-result list loads only record metadata and thumbnails; the full photo is loaded from a separate IndexedDB store only after the user selects **View photo**.
 
 Existing saved photos are migrated to that store, and records without a thumbnail remain readable with a placeholder. Pending records are posted to the configured saved-results API with JSON, the original image, and its thumbnail; successful uploads are marked remotely saved.
 
