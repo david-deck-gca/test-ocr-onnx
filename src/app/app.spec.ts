@@ -432,6 +432,27 @@ describe('App', () => {
     }
   });
 
+  it('should keep the original camera image separate from the OCR working image', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      useImage(image: Blob, name: string, originalImage?: Blob): void;
+      imageBlob: () => Blob | null;
+      originalImageBlob: () => Blob | null;
+    };
+    const workingImage = new Blob(['rotated'], { type: 'image/jpeg' });
+    const originalImage = new Blob(['original'], { type: 'image/jpeg' });
+    vi.stubGlobal('URL', { createObjectURL: vi.fn().mockReturnValue('blob:photo'), revokeObjectURL: vi.fn() });
+
+    try {
+      app.useImage(workingImage, 'container.jpg', originalImage);
+
+      expect(app.imageBlob()).toBe(workingImage);
+      expect(app.originalImageBlob()).toBe(originalImage);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('should wait for the loaded preview before preparing an automatic crop', async () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
