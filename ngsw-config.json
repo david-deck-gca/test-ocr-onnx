@@ -5,7 +5,16 @@
     {
       "name": "application",
       "installMode": "prefetch",
-      "resources": { "files": ["/favicon.png", "/index.html", "/*.css", "/*.js"] }
+      "resources": {
+        "files": [
+          "/favicon.png",
+          "/index.html",
+          "/manifest.webmanifest",
+          "/icons/*.png",
+          "/*.css",
+          "/*.js"
+        ]
+      }
     },
     {
       "name": "ocr-assets",

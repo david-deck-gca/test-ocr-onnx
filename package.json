@@ -8,6 +8,7 @@
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
     "test:e2e": "playwright test",
+    "test:rectify-data-plates": "node scripts/rectify-data-plates.mjs",
     "prepare:opencv": "node scripts/prepare-opencv.mjs",
     "postinstall": "npm run prepare:opencv"
   },

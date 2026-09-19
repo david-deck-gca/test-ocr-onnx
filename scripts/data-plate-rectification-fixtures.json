@@ -1,0 +1,12 @@
+{
+  "plates": [
+    {
+      "source": "images/data-plate_vertical.jpg",
+      "corners": [[432, 84], [2813, 105], [2388, 4018], [625, 4020]]
+    },
+    {
+      "source": "images/data-plate_horizontal.jpg",
+      "corners": [[90, 580], [2872, 580], [2780, 2250], [190, 2250]]
+    }
+  ]
+}

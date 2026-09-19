@@ -390,6 +390,82 @@ describe('App', () => {
     }
   });
 
+  it('should detect a clipped plate from its color difference instead of requiring a closed border', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      findDataPlateColorBounds(image: ImageData): { x: number; y: number; width: number; height: number } | null;
+    };
+    const image = { width: 100, height: 80, data: new Uint8ClampedArray(100 * 80 * 4) } as ImageData;
+    for (let y = 0; y < image.height; y++) {
+      for (let x = 0; x < image.width; x++) {
+        const offset = (y * image.width + x) * 4;
+        const plate = x < 62 && y >= 12 && y < 68;
+        image.data[offset] = plate ? 75 : 180;
+        image.data[offset + 1] = plate ? 82 : 185;
+        image.data[offset + 2] = plate ? 88 : 190;
+        image.data[offset + 3] = 255;
+      }
+    }
+
+    const bounds = app.findDataPlateColorBounds(image);
+
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBe(0);
+    expect(bounds!.y).toBeLessThan(0.2);
+    expect(bounds!.width).toBeGreaterThan(0.55);
+    expect(bounds!.height).toBeGreaterThan(0.65);
+  });
+
+  it('should retain the plate when different background colors surround its edges', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      findDataPlateColorBounds(image: ImageData): { x: number; y: number; width: number; height: number } | null;
+    };
+    const image = { width: 120, height: 100, data: new Uint8ClampedArray(120 * 100 * 4) } as ImageData;
+    for (let y = 0; y < image.height; y++) {
+      for (let x = 0; x < image.width; x++) {
+        const offset = (y * image.width + x) * 4;
+        const plate = x >= 20 && y >= 15;
+        const background = y < 15 ? [70, 105, 150] : x < 20 ? [155, 65, 45] : x >= 110 ? [210, 210, 210] : [60, 45, 35];
+        const color = plate ? [125, 125, 115] : background;
+        image.data[offset] = color[0];
+        image.data[offset + 1] = color[1];
+        image.data[offset + 2] = color[2];
+        image.data[offset + 3] = 255;
+      }
+    }
+
+    const bounds = app.findDataPlateColorBounds(image);
+
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeLessThan(0.2);
+    expect(bounds!.y).toBeLessThan(0.2);
+    expect(bounds!.width).toBeGreaterThan(0.7);
+    expect(bounds!.height).toBeGreaterThan(0.7);
+  });
+
+  it('should preserve the detected plate aspect ratio for every photo orientation', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      dataPlateCropPixels(crop: { x: number; y: number; width: number; height: number }, width: number, height: number): { left: number; top: number; cropWidth: number; cropHeight: number };
+    };
+
+    expect(app.dataPlateCropPixels({ x: 0, y: 0, width: 1, height: 1 }, 300, 400)).toEqual({ left: 0, top: 0, cropWidth: 300, cropHeight: 400 });
+    expect(app.dataPlateCropPixels({ x: 0, y: 0, width: 1, height: 1 }, 400, 300)).toEqual({ left: 0, top: 0, cropWidth: 400, cropHeight: 300 });
+    expect(app.dataPlateCropPixels({ x: 0, y: 0, width: 1, height: 1 }, 300, 300)).toEqual({ left: 0, top: 0, cropWidth: 300, cropHeight: 300 });
+  });
+
+  it('should order perspective corners without introducing a reflection', () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      orderQuadrilateral(points: number[][]): number[][];
+    };
+
+    expect(app.orderQuadrilateral([[100, 300], [300, 100], [700, 150], [650, 500]])).toEqual([
+      [300, 100], [700, 150], [650, 500], [100, 300],
+    ]);
+  });
+
   it('should launch automatic crop when an image is selected in the default mode', async () => {
     const fixture = TestBed.createComponent(App);
     const app = fixture.componentInstance as unknown as {
@@ -1134,6 +1210,29 @@ describe('App', () => {
       expect(revokeObjectUrl).toHaveBeenCalledWith('blob:first-attempt');
       decoded.release();
       expect(revokeObjectUrl).toHaveBeenCalledWith('blob:second-attempt');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('should apply EXIF orientation only for the Data plate decode path', async () => {
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance as unknown as {
+      decodeImage(image: Blob, applyExifOrientation?: boolean): Promise<{ release(): void }>;
+    };
+    const bitmap = { width: 400, height: 300, close: vi.fn() };
+    const createBitmap = vi.fn().mockResolvedValue(bitmap);
+    vi.stubGlobal('createImageBitmap', createBitmap);
+    const image = new Blob(['image'], { type: 'image/jpeg' });
+
+    try {
+      const standard = await app.decodeImage(image);
+      standard.release();
+      const dataPlate = await app.decodeImage(image, true);
+      dataPlate.release();
+
+      expect(createBitmap).toHaveBeenNthCalledWith(1, image, { imageOrientation: 'none' });
+      expect(createBitmap).toHaveBeenNthCalledWith(2, image, { imageOrientation: 'from-image' });
     } finally {
       vi.unstubAllGlobals();
     }
