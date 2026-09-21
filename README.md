@@ -183,7 +183,7 @@ For UN tanks, the first two OCR rows matching `number KG / number letters` are i
 
 ## Local Records and Synchronization
 
-Engraved `MM YY` markings use a fixed four-slot OCR fallback during Data plate scans. The slots and any valid synthesized date are retained in raw OCR results; no new structured field is created yet.
+Engraved `MM YY` markings use a fixed four-slot OCR fallback during selected data-plate crop scans. The slots and any valid synthesized date are retained in raw OCR results; no new structured field is created yet.
 
 Saving a result writes the JSON payload, a 160px JPEG thumbnail, and the original image `Blob` to the browser's IndexedDB `container-mark-reader` database. For camera captures, the rotation-corrected working image is not saved as the full photo. The saved-result list loads only record metadata and thumbnails; the full photo is loaded from a separate IndexedDB store only after the user selects **View photo**.
 
@@ -222,6 +222,18 @@ Run the complete Playwright E2E suite with:
 ```text
 npm run test:e2e
 ```
+
+Run the data-plate perspective-rectification evaluation with:
+
+```text
+npm run test:rectify-data-plates
+```
+
+This standalone OpenCV/Playwright evaluation processes `images/data-plate_horizontal.jpg` and `images/data-plate_vertical.jpg`. It uses the manually verified plate corners in `scripts/data-plate-rectification-fixtures.json` to apply a four-point perspective transform, then detects the principal horizontal and vertical separator lines and writes content crops for the resulting regions.
+
+The expected region fixtures are stored in `test-fixtures/expected-regions`. Generated rectified images, separator and region overlays, detected crops, metadata, numeric-value reports, and timing information are written to `test-results/data-plate-rectification`. For each plate, the configured largest region is also split at the line above the periodic-inspection text, producing one image with the content above the line and one image containing the periodic-inspections section. The horizontal plate uses a fixture-specific 45-pixel bottom extension because its detected main-panel boundary clips the final inspection rows. The periodic-inspections image is processed with the local Node OCR engine; recognized text, mean confidence, and OCR duration are included in `values.md`, `metadata.json`, and `timings.md`. The evaluation compares each expected region against the rectified image and records its match score and overlap with a detected region in `metadata.json`.
+
+This evaluation documents and regression-tests the standalone rectification approach; it is not part of the production Angular image-processing workflow. Production data-plate scans analyze the user-selected crop directly with multiple preprocessing variants.
 
 Use a maximum command timeout of `240000` ms (4 minutes) so the Chromium and WebKit suites can complete.
 
