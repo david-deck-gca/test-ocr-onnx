@@ -1,0 +1,40 @@
+{
+  "main.jpg": [
+    ["Nominal liquid capacity", "26000", "L"],
+    ["Total measured water capacity", "25880", "L"],
+    ["Total measured water capacity", "6832", "US gal"],
+    ["Tare weight", "3860", "kg"],
+    ["Tare weight", "8510", "lb"],
+    ["Maximum payload weight", "32140", "kg"],
+    ["Maximum payload weight", "70855", "lb"],
+    ["Maximum gross weight", "36000", "kg"],
+    ["Maximum gross weight", "79365", "lb"],
+    ["Tank MAWP", "4", "bar"],
+    ["Tank MAWP", "58", "psi"],
+    ["Tank test pressure", "6", "bar"],
+    ["Tank test pressure", "87", "psi"],
+    ["Steam tube MAWP", "6", "bar"],
+    ["Steam tube MAWP", "87", "psi"],
+    ["Steam tube test pressure", "10", "bar"],
+    ["Steam tube test pressure", "145", "psi"],
+    ["External design pressure", "0.41", "bar"],
+    ["External design pressure", "6", "psi"],
+    ["Design temperature range", "-40 to 150", "deg C"],
+    ["Design temperature range", "-40 to 302", "deg F"],
+    ["Maximum product temperature", "150", "deg C"],
+    ["Maximum product temperature", "302", "deg F"],
+    ["Minimum calculation thickness, shell", "4.18", "mm"],
+    ["Minimum calculation thickness, ends", "5.2", "mm"],
+    ["Corrosion allowance, shell", "0.22", "mm"],
+    ["Corrosion allowance, ends", "0.2", "mm"],
+    ["Thickness in reference steel", "6.00", "mm"],
+    ["Thickness in reference steel", "0.236", "inch"]
+  ],
+  "csc-safety-approuval.jpg": [
+    ["Maximum operating gross mass", "36000", "kg"],
+    ["Maximum operating gross mass", "79365", "lb"],
+    ["Allowable stacking load for 1.8g", "216000", "kg"],
+    ["Allowable stacking load for 1.8g", "476198", "lb"],
+    ["Transverse racking test force", "150000", "N"]
+  ]
+}
